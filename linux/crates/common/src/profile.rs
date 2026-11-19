@@ -102,6 +102,10 @@ pub struct Profile {
     pub custom_turn_ips: String,
     #[serde(default)]
     pub routing: Routing,
+    /// Не сдаваться: переподключаться без ограничения числа попыток, даже
+    /// если ядро ни разу не подключилось (сеть появится позже).
+    #[serde(default)]
+    pub persistent: bool,
 }
 
 impl Profile {
@@ -123,6 +127,7 @@ impl Profile {
             vk_auth_mode: default_vk_auth_mode(),
             custom_turn_ips: String::new(),
             routing: Routing::default(),
+            persistent: false,
         }
     }
 

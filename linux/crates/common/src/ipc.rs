@@ -123,6 +123,9 @@ pub struct Status {
     pub restarts: u32,
     #[serde(default)]
     pub last_error: Option<String>,
+    /// Подсказка службы о вероятной причине, пока туннель не поднялся.
+    #[serde(default)]
+    pub diagnosis: Option<String>,
     /// Хеши, которые VK больше не принимает (звонок завершён).
     #[serde(default)]
     pub dead_hashes: Vec<String>,

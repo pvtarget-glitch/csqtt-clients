@@ -9,6 +9,7 @@ mod net;
 mod server;
 mod session;
 mod state;
+mod watch;
 
 use anyhow::{bail, Context, Result};
 use config::DaemonConfig;

@@ -62,7 +62,14 @@ impl Client {
 
     /// Отправляет запрос и ждёт ответ на него, откладывая события.
     pub fn call(&mut self, request: &Request) -> Result<Response> {
-        self.send(request)?;
+        if let Err(error) = self.send(request) {
+            // Демон мог ответить отказом и закрыть соединение раньше, чем
+            // мы успели записать запрос: тогда причина уже лежит в сокете.
+            if let Ok(Response::Error { message }) = self.read() {
+                bail!("{message}");
+            }
+            return Err(error);
+        }
         loop {
             match self.read()? {
                 Response::Event { event } => self.backlog.push(event),

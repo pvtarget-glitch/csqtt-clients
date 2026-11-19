@@ -5,6 +5,7 @@ use crate::{
     core::{self, CoreEvent, CoreLaunch},
     net::{NetParams, Network},
     state::{now_millis, Control, SessionHandle, Shared},
+    watch::Watcher,
 };
 use csqtt_common::{
     ipc::{CaptchaRequest, Event, State},
@@ -31,6 +32,14 @@ const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const STARTUP_FAILURES_LIMIT: u32 = 3;
 const TUN_HANDOFF_ATTEMPTS: u32 = 60;
 const MAX_CAPTCHA_TOKEN: usize = 8192;
+/// Как часто проверять сон и смену сети.
+const WATCH_INTERVAL: Duration = Duration::from_secs(5);
+/// Пауза перед перезапуском по событию системы: несколько событий подряд
+/// (выход из сна, затем подключение Wi-Fi) сливаются в один перезапуск.
+const SYSTEM_RESTART_SETTLE: Duration = Duration::from_secs(3);
+/// Сколько рукопожатий без единого входящего пакета при живом TURN
+/// означают, что молчит сам сервер.
+const SILENT_HANDSHAKES: u32 = 6;
 
 enum Line {
     Stdout(String),
@@ -65,6 +74,8 @@ struct Session {
     dead_hashes: BTreeSet<String>,
     captcha_sequence: u64,
     last_planned_restart: Option<Instant>,
+    watcher: Watcher,
+    diagnosis: Option<String>,
 }
 
 /// Одно «включение» ядра.
@@ -82,6 +93,11 @@ struct Run {
     stopping: bool,
     planned_restart: Option<String>,
     fatal: Option<String>,
+    /// Перезапуск из-за сна или смены сети (без ограничения частоты).
+    system_restart_at: Option<(Instant, String)>,
+    allocations: u32,
+    silent_handshakes: u32,
+    turn_suspect: bool,
 }
 
 pub async fn start(shared: &Arc<Shared>, profile: Profile) -> Result<(), String> {
@@ -119,6 +135,8 @@ pub async fn start(shared: &Arc<Shared>, profile: Profile) -> Result<(), String>
         dead_hashes: BTreeSet::new(),
         captcha_sequence: 0,
         last_planned_restart: None,
+        watcher: Watcher::new(&shared.config.interface),
+        diagnosis: None,
     };
     let task = tokio::spawn(session.run(receiver));
     *slot = Some(SessionHandle { control, task });
@@ -244,7 +262,10 @@ impl Session {
                         failures += 1;
                     }
                     let reason = describe_exit(status);
-                    if !ever_connected && failures >= STARTUP_FAILURES_LIMIT {
+                    if !ever_connected
+                        && failures >= STARTUP_FAILURES_LIMIT
+                        && !self.profile.persistent
+                    {
                         break Some(format!(
                             "ядро {failures} раза подряд завершилось до подключения ({reason}); подробности: csqtt logs"
                         ));
@@ -279,6 +300,7 @@ impl Session {
             Some(message) => shared.note(format!("сессия завершена с ошибкой: {message}")),
             None => shared.note("туннель отключён"),
         }
+        let final_diagnosis = self.diagnosis.take();
         shared.update_status(|status| {
             let profile = status.profile.take();
             let restarts = status.restarts;
@@ -288,6 +310,8 @@ impl Session {
             if let Some(message) = error {
                 status.state = State::Failed;
                 status.last_error = Some(message);
+                // Подсказка остаётся видна и после остановки.
+                status.diagnosis = final_diagnosis;
             }
         });
     }
@@ -345,6 +369,10 @@ impl Session {
             stopping: false,
             planned_restart: None,
             fatal: None,
+            system_restart_at: None,
+            allocations: 0,
+            silent_handshakes: 0,
+            turn_suspect: false,
         };
         if self.profile.js_hash_mode() {
             run.write(&core::vk_js_bootstrap_line(&self.profile.vk_token))
@@ -353,11 +381,14 @@ impl Session {
 
         let mut lines_open = true;
         let mut control_open = true;
+        let mut watch_tick = tokio::time::interval(WATCH_INTERVAL);
+        watch_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let status = loop {
             let deadline = [
                 run.captcha.as_ref().map(|captcha| captcha.deadline),
                 run.zero_check_at,
                 run.restart_at.as_ref().map(|(at, _)| *at),
+                run.system_restart_at.as_ref().map(|(at, _)| *at),
                 run.kill_at,
             ]
             .into_iter()
@@ -379,6 +410,14 @@ impl Session {
                         self.request_stop(&mut run).await;
                     }
                 },
+                _ = watch_tick.tick() => {
+                    if let Some(reason) = tokio::task::block_in_place(|| self.watcher.check()) {
+                        if !run.stopping {
+                            self.shared.note(format!("{reason}: ядро будет перезапущено"));
+                            run.system_restart_at = Some((Instant::now() + SYSTEM_RESTART_SETTLE, reason));
+                        }
+                    }
+                }
                 _ = sleep_until_optional(deadline) => {
                     if self.handle_timers(&mut run).await {
                         let _ = child.start_kill();
@@ -445,6 +484,19 @@ impl Session {
                     .await;
             }
         }
+        if run
+            .system_restart_at
+            .as_ref()
+            .is_some_and(|(at, _)| *at <= now)
+        {
+            if let Some((_, reason)) = run.system_restart_at.take() {
+                if !run.stopping && run.planned_restart.is_none() {
+                    self.last_planned_restart = Some(Instant::now());
+                    run.planned_restart = Some(reason);
+                    run.send_stop(false).await;
+                }
+            }
+        }
         if run.restart_at.as_ref().is_some_and(|(at, _)| *at <= now) {
             if let Some((_, reason)) = run.restart_at.take() {
                 self.plan_restart(run, reason).await;
@@ -471,6 +523,9 @@ impl Session {
     async fn handle_line(&mut self, run: &mut Run, line: Line, live: bool) {
         let text = match line {
             Line::Stderr(text) => {
+                if live && !run.connected {
+                    self.inspect_startup(run, &text);
+                }
                 self.shared.log(text);
                 return;
             }
@@ -543,6 +598,14 @@ impl Session {
             CoreEvent::NetworkSuspect => {
                 self.shared
                     .note("серия тайм-аутов TURN: похоже, пропала связь с VK");
+                if !run.connected && run.allocations == 0 && !run.turn_suspect {
+                    run.turn_suspect = true;
+                    self.set_diagnosis(Some(
+                        "Узлы VK не отвечают: проверь подключение к интернету. Если интернет есть, \
+                         возможно, оператор блокирует звонки VK."
+                            .to_owned(),
+                    ));
+                }
             }
             CoreEvent::CallUnavailable { hash, code } => {
                 self.handle_dead_hash(run, hash, code).await
@@ -599,6 +662,9 @@ impl Session {
         let interface = self.shared.config.interface.clone();
         let first = !run.connected;
         run.connected = true;
+        if self.diagnosis.is_some() {
+            self.set_diagnosis(None);
+        }
         self.shared.update_status(|status| {
             status.state = State::Connected;
             status.tunnel_ip = Some(conf.ip.to_string());
@@ -781,6 +847,32 @@ impl Session {
         self.close_captcha(run);
     }
 
+    /// Разбор журнала ядра до подключения: TURN работает, а сервер молчит?
+    fn inspect_startup(&mut self, run: &mut Run, text: &str) {
+        if text.contains("[TURN] Аллокация активна") {
+            run.allocations += 1;
+        } else if text.contains("таймаут рукопожатия") && text.contains("входящих 0")
+        {
+            run.silent_handshakes += 1;
+        } else {
+            return;
+        }
+        if run.allocations > 0
+            && run.silent_handshakes == SILENT_HANDSHAKES
+            && self.diagnosis.is_none()
+        {
+            let message = server_silent_message(self.profile.port);
+            self.shared.note(format!("диагноз: {message}"));
+            self.set_diagnosis(Some(message));
+        }
+    }
+
+    fn set_diagnosis(&mut self, diagnosis: Option<String>) {
+        self.diagnosis = diagnosis.clone();
+        self.shared
+            .update_status(|status| status.diagnosis = diagnosis);
+    }
+
     fn close_captcha(&mut self, run: &mut Run) {
         if let Some(captcha) = run.captcha.take() {
             self.shared.update_status(|status| status.captcha = None);
@@ -820,4 +912,12 @@ async fn wait_for_stop(control: &mut mpsc::Receiver<Control>) -> bool {
             Some(Control::Captcha { .. }) => {}
         }
     }
+}
+
+fn server_silent_message(port: u16) -> String {
+    format!(
+        "Узлы VK отвечают, а сервер csqtt — нет: от него не пришло ни одного пакета. \
+         Проверь, что сервер запущен, UDP-порт {port} открыт на сервере и у хостера, \
+         пароль в профиле совпадает с паролем сервера, а IP сервера не заблокирован."
+    )
 }

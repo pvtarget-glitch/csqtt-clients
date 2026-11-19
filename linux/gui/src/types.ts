@@ -30,6 +30,7 @@ export interface Status {
   connected_since: number | null;
   restarts: number;
   last_error: string | null;
+  diagnosis: string | null;
   dead_hashes: string[];
   captcha: CaptchaRequest | null;
   captcha_handlers: number;
@@ -75,6 +76,7 @@ export interface Profile {
   vk_auth_mode: string;
   custom_turn_ips: string;
   routing: Routing;
+  persistent: boolean;
 }
 
 export interface Settings {

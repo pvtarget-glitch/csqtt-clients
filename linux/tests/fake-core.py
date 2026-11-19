@@ -114,6 +114,16 @@ def main():
         event("ERROR", {"code": "authentication_rejected", "message": "FATAL_AUTH: invalid password", "fatal": True})
         time.sleep(0.2)
         sys.exit(1)
+    if SCENARIO == "silent":
+        # TURN работает, сервер не отвечает: как в журнале ядра при
+        # недоступном или заблокированном сервере.
+        for index in range(3):
+            log("[TURN] Аллокация активна: relay 155.212.200.%d:40000" % (10 + index))
+        for index in range(8):
+            time.sleep(0.2)
+            log("[СЕССИЯ #%d] DTLS: таймаут рукопожатия за 8000 мс (состояние ждём полёт сервера, входящих 0, повторов 16)" % (index + 1))
+        while True:
+            time.sleep(1)
     if SCENARIO == "crash":
         log("simulated crash")
         sys.exit(7)

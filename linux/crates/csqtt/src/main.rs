@@ -345,6 +345,9 @@ fn print_status(status: &Status) {
     if let Some(error) = &status.last_error {
         println!("Ошибка:       {error}");
     }
+    if let Some(diagnosis) = &status.diagnosis {
+        println!("Диагноз:      {diagnosis}");
+    }
 }
 
 fn status(json: bool) -> Result<()> {
@@ -435,6 +438,7 @@ fn up(name: Option<&str>, follow: bool) -> Result<()> {
     let verbose = follow || std::io::stderr().is_terminal();
     let mut started = false;
     let mut connected = false;
+    let mut shown_diagnosis: Option<String> = None;
     loop {
         match client.next_event()? {
             Event::Log { entry } => {
@@ -450,44 +454,54 @@ fn up(name: Option<&str>, follow: bool) -> Result<()> {
                 }
             }
             Event::CaptchaClosed { .. } => {}
-            Event::Status { status } => match status.state {
-                State::Connecting | State::Reconnecting | State::Disconnecting => started = true,
-                State::Connected => {
-                    started = true;
-                    if !connected {
-                        connected = true;
-                        println!();
-                        print_status(&status);
-                        if !follow {
-                            if status.captcha_handlers <= u32::from(handle_captcha) {
-                                println!(
+            Event::Status { status } => {
+                if status.diagnosis.is_some() && status.diagnosis != shown_diagnosis {
+                    if let Some(diagnosis) = &status.diagnosis {
+                        eprintln!("\nДиагноз: {diagnosis}\n");
+                    }
+                }
+                shown_diagnosis = status.diagnosis.clone();
+                match status.state {
+                    State::Connecting | State::Reconnecting | State::Disconnecting => {
+                        started = true
+                    }
+                    State::Connected => {
+                        started = true;
+                        if !connected {
+                            connected = true;
+                            println!();
+                            print_status(&status);
+                            if !follow {
+                                if status.captcha_handlers <= u32::from(handle_captcha) {
+                                    println!(
                                     "\nСовет: чтобы окно капчи появлялось и после подключения, держи запущенным \
                                      `csqtt agent`\n(systemctl --user enable --now csqtt-agent)."
                                 );
+                                }
+                                return Ok(());
                             }
+                        }
+                    }
+                    // Первым приходит статус на момент подписки: в нём может
+                    // остаться ошибка прошлой сессии, её пропускаем.
+                    State::Failed => {
+                        if started {
+                            bail!(
+                                "{}",
+                                status
+                                    .last_error
+                                    .unwrap_or_else(|| "подключение не удалось".into())
+                            )
+                        }
+                    }
+                    State::Disconnected => {
+                        if started {
+                            println!("Туннель отключён");
                             return Ok(());
                         }
                     }
                 }
-                // Первым приходит статус на момент подписки: в нём может
-                // остаться ошибка прошлой сессии, её пропускаем.
-                State::Failed => {
-                    if started {
-                        bail!(
-                            "{}",
-                            status
-                                .last_error
-                                .unwrap_or_else(|| "подключение не удалось".into())
-                        )
-                    }
-                }
-                State::Disconnected => {
-                    if started {
-                        println!("Туннель отключён");
-                        return Ok(());
-                    }
-                }
-            },
+            }
         }
         std::io::stdout().flush().ok();
     }

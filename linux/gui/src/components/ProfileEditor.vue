@@ -34,6 +34,7 @@ function blank(): Profile {
       ip_mode: "off",
       ips: [],
     },
+    persistent: false,
   };
 }
 
@@ -245,6 +246,13 @@ async function copyLink() {
             </select>
           </label>
         </div>
+        <label class="check">
+          <input v-model="draft.persistent" type="checkbox" />
+          <span>
+            Не сдаваться: переподключаться без ограничения попыток. Для компьютера, который
+            включается раньше, чем появляется сеть.
+          </span>
+        </label>
         <label class="field">
           <span>Свои адреса узлов VK через запятую — пусто, если ядро выбирает само</span>
           <input v-model="draft.custom_turn_ips" class="input" spellcheck="false" />

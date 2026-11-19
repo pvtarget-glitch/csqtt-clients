@@ -197,6 +197,10 @@ const needsHashes = computed(
             <button class="link" type="button" @click="editSelected">Заменить хеши</button>
           </span>
         </div>
+        <div v-if="status?.diagnosis" class="note note--wait">
+          <strong>Похоже, в чём дело</strong>
+          <span class="small selectable">{{ status.diagnosis }}</span>
+        </div>
         <div v-if="state === 'failed' && status?.last_error" class="note note--fault">
           <strong>Подключиться не удалось</strong>
           <span class="small selectable">{{ status.last_error }}</span>

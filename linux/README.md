@@ -31,7 +31,7 @@ Linux-клиент туннеля [CSQTT](https://github.com/amurcanov/csqtt): �
 Готовый пакет — в разделе [Releases](https://github.com/pvtarget-glitch/csqtt-linux/releases).
 
 ```bash
-sudo apt install ./csqtt-linux_0.2.0+core2.5.0_amd64.deb
+sudo apt install ./csqtt-linux_0.2.1+core2.5.0_amd64.deb
 ```
 
 Пакет создаёт пользователя `csqtt-core` и группу `csqtt`, добавляет в группу того, кто ставил через `sudo`, и запускает `csqttd`. После установки в меню приложений появляется «csqtt». Готовому пакету нужен glibc 2.39 или новее (Ubuntu 24.04+, Mint 22+, Debian 13+); для более старых систем собери из исходников на них же.
@@ -111,6 +111,7 @@ turn_transport = "udp"      # udp | tcp_tls
 srtp_mode = "auto"          # auto | wrap-srtp | dtls-srtp
 captcha_mode = "auto"       # auto | rjs | wv (сразу окно)
 vk_auth_mode = "vkcalls"    # vkcalls | legacy | auto_js (только с vk_token)
+persistent = false          # true — переподключаться без ограничения попыток
 
 [profile.routing]
 domain_mode = "blacklist"   # off | blacklist | whitelist
@@ -156,7 +157,7 @@ CSQTT_CORE_BIN="$PWD/dist/csqtt-core" cargo test -p csqttd -- --ignored
 
 - Модульные тесты: `cargo test`.
 - Формат ссылок сверен с независимой реализацией алгоритма из Kotlin-кода: `python3 tests/link_compat.py target/debug/csqtt`.
-- Сетевая часть (TUN, передача fd, правила, DNS через resolv.conf, перезапуски, капча, права на сокет) — `sudo tests/integration.sh`: 76 проверок в отдельном network namespace с имитатором ядра.
+- Сетевая часть (TUN, передача fd, правила, DNS через resolv.conf, перезапуски, капча, права на сокет) — `sudo tests/integration.sh`: 86 проверок в отдельном network namespace с имитатором ядра.
 - На настоящем сервере csqtt 2.5.0 из командной строки: туннель поднимается, ядро получает TUN-интерфейс и конфигурацию, DNS ставится через resolv.conf.
 - Окно под виртуальным дисплеем на стенде `tests/gui-env.sh`: добавление сервера по ссылке, подключение и отключение, состояния ошибки и проверки VK, журнал, запись автозапуска, запрет второго экземпляра.
 - Настоящее ядро 2.5.0: принимает аргументы демона, получает TUN-fd, останавливается по `STOP`.

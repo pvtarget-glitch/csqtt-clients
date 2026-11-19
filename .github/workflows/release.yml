@@ -15,7 +15,7 @@ on:
       version:
         description: "Release version tag (e.g. v0.2.0)"
         required: false
-        default: "v0.2.0"
+        default: "v0.2.1"
 
 permissions:
   contents: write
@@ -41,6 +41,12 @@ jobs:
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
       - name: Модульные тесты
         run: cargo test -p csqtt-common -p csqttd -p csqtt
+      - name: Интеграционные тесты (сеть в отдельном namespace, имитатор ядра)
+        run: |
+          sudo apt-get install -y iproute2 python3-cryptography
+          cargo build -p csqttd -p csqtt
+          sudo tests/integration.sh
+          python3 tests/link_compat.py target/debug/csqtt
       - name: Сборка .deb (ядро из корня форка без изменений)
         run: scripts/build-deb.sh
       - uses: actions/upload-artifact@v4

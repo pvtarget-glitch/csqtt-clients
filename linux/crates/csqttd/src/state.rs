@@ -87,6 +87,7 @@ pub fn idle_status() -> Status {
         connected_since: None,
         restarts: 0,
         last_error: None,
+        diagnosis: None,
         dead_hashes: Vec::new(),
         captcha: None,
         captcha_handlers: 0,

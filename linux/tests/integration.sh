@@ -126,7 +126,8 @@ ${3:-}
 EOF
 }
 : > "$WORK/config/profiles.toml"
-for scenario in ok captcha fatal crash restart routing tunlost wide; do profile "$scenario" "$scenario"; done
+for scenario in ok captcha fatal crash restart routing tunlost wide silent; do profile "$scenario" "$scenario"; done
+profile persistent crash "persistent = true"
 
 cat > "$WORK/captcha-stub" <<'EOF'
 #!/bin/sh
@@ -235,8 +236,9 @@ echo "== перезапуск ядра"
 csqtt up restart >/dev/null 2>&1
 HELD=1
 for i in $(seq 1 40); do
-  ns ip -4 rule list | grep -q "lookup $TABLE" || HELD=0
-  ns ip link show dev $IFACE >/dev/null 2>&1 || HELD=0
+  # Без конвейера с grep -q: при pipefail ранний выход grep даёт ложный сбой.
+  [[ "$(ns ip -4 rule list)" == *"lookup $TABLE"* ]] || { HELD=0; echo "       [$i] нет правила: $(state)"; }
+  ns ip link show dev $IFACE >/dev/null 2>&1 || { HELD=0; echo "       [$i] нет интерфейса: $(state)"; }
   [ "$(field restarts)" = 1 ] && [ "$(state)" = connected ] && break
   sleep 0.25
 done
@@ -250,6 +252,40 @@ contains "новое ядро получает пакеты из того же �
 csqtt down >/dev/null
 
 # --- правила сервера ---------------------------------------------------------
+echo "== смена сети"
+csqtt up ok >/dev/null 2>&1
+ns ip route replace default via 10.250.0.3 dev itv1
+for i in $(seq 1 60); do
+  [ "$(field restarts)" = 1 ] && [ "$(state)" = connected ] && break
+  sleep 0.25
+done
+LOG="$(csqtt logs -n 0)"
+contains "смена шлюза замечена" "сеть на itv1 изменилась" "$LOG"
+contains "ядро перезапущено после смены сети" "gen=2" "$LOG"
+check "после перезапуска снова подключено" test "$(state)" = connected
+contains "интерфейс не снимался" "10.99.0.2/32" "$(ns ip -4 addr show dev $IFACE)"
+ns ip route replace default via 10.250.0.1 dev itv1
+csqtt down >/dev/null
+
+echo "== сервер молчит"
+csqtt up silent >/dev/null 2>&1 &
+UP_PID=$!
+for i in $(seq 1 40); do [ "$(field diagnosis)" != None ] && break; sleep 0.25; done
+contains "служба ставит диагноз «сервер молчит»" "сервер csqtt — нет" "$(field diagnosis)"
+contains "диагноз называет порт сервера" "UDP-порт 46000" "$(field diagnosis)"
+contains "диагноз виден в csqtt status" "Диагноз:" "$(csqtt status)"
+csqtt down >/dev/null; wait $UP_PID 2>/dev/null
+
+echo "== постоянное подключение"
+csqtt up persistent >/dev/null 2>&1 &
+UP_PID=$!
+for i in $(seq 1 80); do [ "$(field restarts)" -ge 3 ] 2>/dev/null && break; sleep 0.25; done
+sleep 1
+check "после трёх неудач подряд сессия не остановлена" test "$(state)" != failed
+check "перезапусков не меньше трёх" test "$(field restarts)" -ge 3
+csqtt down >/dev/null; wait $UP_PID 2>/dev/null
+check "отключение посреди повторов" test "$(state)" = disconnected
+
 echo "== маршрутизация от сервера"
 csqtt up routing >/dev/null 2>&1
 contains "throw-маршрут для IP из правил сервера" "throw 198.51.100.0/24" "$(ns ip -4 route show table $TABLE)"
