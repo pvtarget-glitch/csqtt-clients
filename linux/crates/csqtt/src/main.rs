@@ -1,5 +1,7 @@
 //! csqtt — пользовательская утилита Linux-клиента csqtt.
 
+mod server;
+
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use csqtt_common::{
@@ -83,6 +85,9 @@ enum Command {
     },
     /// Фоновый помощник графической сессии: окно капчи и уведомления
     Agent,
+    /// Сервер csqtt на VPS: установка и удаление по SSH
+    #[command(subcommand)]
+    Server(server::ServerCommand),
     /// Запустить программу мимо туннеля: `csqtt direct -- firefox`
     Direct {
         /// Программа и её аргументы
@@ -97,6 +102,20 @@ fn main() {
     // SAFETY: вызов до создания потоков, обработчик — системный.
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+    // Режим SSH_ASKPASS для `csqtt server`: ssh вызывает нас с текстом
+    // запроса, пароль лежит в окружении, которое мы же ему передали.
+    if std::env::var_os(csqtt_common::deploy::ASKPASS_SECRET_ENV).is_some()
+        || std::env::var_os(csqtt_common::deploy::ASKPASS_PASSPHRASE_ENV).is_some()
+    {
+        let prompt = std::env::args().nth(1).unwrap_or_default();
+        match csqtt_common::deploy::askpass_answer(&prompt) {
+            Some(secret) => {
+                println!("{secret}");
+                std::process::exit(0);
+            }
+            None => std::process::exit(1),
+        }
     }
     let cli = Cli::parse();
     if let Err(error) = run(cli.command) {
@@ -155,6 +174,7 @@ fn run(command: Command) -> Result<()> {
         Command::Logs { lines, follow } => logs(lines, follow),
         Command::Agent => agent(),
         Command::Direct { command } => direct(&command),
+        Command::Server(command) => server::run(command),
     }
 }
 

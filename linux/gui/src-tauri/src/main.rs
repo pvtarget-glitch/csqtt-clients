@@ -8,6 +8,7 @@
 
 mod apps;
 mod daemon;
+mod server;
 mod settings;
 
 use csqtt_common::{
@@ -169,6 +170,34 @@ fn snapshot() -> Snapshot {
             message: Some(message),
         },
     }
+}
+
+#[tauri::command(async)]
+fn server_assets() -> server::AssetsInfo {
+    server::assets_info()
+}
+
+#[tauri::command(async)]
+fn deploy_install(
+    app: AppHandle,
+    state: tauri::State<'_, server::DeployState>,
+    form: server::DeployForm,
+) -> Result<server::DeployResult, String> {
+    server::install(&app, &state, form)
+}
+
+#[tauri::command(async)]
+fn deploy_remove(
+    app: AppHandle,
+    state: tauri::State<'_, server::DeployState>,
+    form: server::DeployForm,
+) -> Result<(), String> {
+    server::remove(&app, &state, form)
+}
+
+#[tauri::command]
+fn deploy_cancel(state: tauri::State<'_, server::DeployState>) {
+    server::cancel(&state);
 }
 
 #[tauri::command(async)]
@@ -355,6 +384,7 @@ fn main() {
             },
         ))
         .manage(state)
+        .manage(server::DeployState::default())
         .invoke_handler(tauri::generate_handler![
             snapshot,
             fetch_logs,
@@ -372,6 +402,10 @@ fn main() {
             list_apps,
             launch_direct,
             set_direct_launcher,
+            server_assets,
+            deploy_install,
+            deploy_remove,
+            deploy_cancel,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

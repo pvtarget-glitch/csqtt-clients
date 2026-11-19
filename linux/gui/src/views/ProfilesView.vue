@@ -2,10 +2,12 @@
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import ProfileEditor from "../components/ProfileEditor.vue";
+import ServerDeploy from "../components/ServerDeploy.vue";
 import { app, fail, loadProfiles, notify } from "../store";
 import type { Profile } from "../types";
 
 const link = ref("");
+const deploying = ref(false);
 const busy = ref(false);
 
 function source(profile: Profile): string {
@@ -36,6 +38,7 @@ async function addFromLink() {
 
 <template>
   <ProfileEditor v-if="app.editing !== null" :name="app.editing" @close="app.editing = null" />
+  <ServerDeploy v-else-if="deploying" @close="deploying = false" />
   <main v-else class="view">
     <div class="stack">
       <form class="field" @submit.prevent="addFromLink">
@@ -71,14 +74,21 @@ async function addFromLink() {
         на телефоне.
       </p>
 
-      <p>
+      <p class="actions">
         <button class="link" type="button" @click="app.editing = ''">Ввести данные вручную</button>
+        <button class="link" type="button" @click="deploying = true">Установить сервер на свой VPS</button>
       </p>
     </div>
   </main>
 </template>
 
 <style scoped>
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+
 .servers {
   border-top: 1px solid var(--rule);
 }

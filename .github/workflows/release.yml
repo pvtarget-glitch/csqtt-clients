@@ -15,13 +15,35 @@ on:
       version:
         description: "Release version tag (e.g. v0.2.0)"
         required: false
-        default: "v0.3.2"
+        default: "v0.4.0"
 
 permissions:
   contents: write
 
 jobs:
+  server:
+    # Сервер csqtt для установки на VPS из окна и `csqtt server install`:
+    # статические бинарники musl под x86_64, aarch64 и armv7.
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Тесты сервера и сборка под VPS
+        run: |
+          pip install --user --break-system-packages cargo-zigbuild
+          export PATH="$HOME/.local/bin:$PATH"
+          scripts/build-server.sh --tests
+          scripts/build-server.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server
+          path: linux/dist/server/
+
   deb:
+    needs: server
     # Сборка на 22.04 (glibc 2.35): пакет ставится на Ubuntu 22.04+,
     # Mint 21+ и Debian 12+ — glibc совместима вперёд.
     runs-on: ubuntu-22.04
@@ -64,8 +86,18 @@ jobs:
         run: |
           scripts/build-core.sh
           CSQTT_CORE_BIN="$PWD/dist/csqtt-core" cargo test -p csqttd -- --ignored
+      - name: Установка сервера по SSH (настоящий sshd, имитатор deploy.sh)
+        run: |
+          sudo apt-get install -y openssh-server openssh-client
+          sudo tests/deploy-test.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: server
+          path: linux/dist/server
       - name: Сборка .deb (ядро из rust-client в корне форка)
-        run: scripts/build-deb.sh --no-core
+        run: |
+          chmod 755 dist/server/csqtt-linux-*
+          scripts/build-deb.sh --no-core
       - uses: actions/upload-artifact@v4
         with:
           name: deb-amd64

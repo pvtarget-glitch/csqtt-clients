@@ -3,6 +3,7 @@
 
 pub mod captcha;
 pub mod client;
+pub mod deploy;
 pub mod ipc;
 pub mod link;
 pub mod profile;

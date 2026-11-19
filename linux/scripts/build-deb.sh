@@ -45,6 +45,15 @@ done
 install -D -m 755 "$DIST/csqtt-core"               "$STAGE/usr/lib/csqtt/csqtt-core"
 install -D -m 755 helpers/csqtt-captcha            "$STAGE/usr/lib/csqtt/csqtt-captcha"
 install -D -m 644 "$DIST/domains.txt"              "$STAGE/usr/share/csqtt/domains.txt"
+# Сервер для `csqtt server install` (собирается scripts/build-server.sh).
+if [ -x "$DIST/server/csqtt-linux-amd64" ]; then
+  for file in deploy.sh version csqtt-linux-amd64 csqtt-linux-arm64 csqtt-linux-armv7; do
+    mode=755; case "$file" in deploy.sh|version) mode=644 ;; esac
+    install -D -m "$mode" "$DIST/server/$file" "$STAGE/usr/share/csqtt/server/$file"
+  done
+else
+  echo "внимание: нет dist/server — пакет без сервера для установки на VPS (scripts/build-server.sh)" >&2
+fi
 install -D -m 644 packaging/csqttd.service         "$STAGE/usr/lib/systemd/system/csqttd.service"
 install -D -m 644 packaging/csqtt-agent.service    "$STAGE/usr/lib/systemd/user/csqtt-agent.service"
 install -D -m 644 packaging/csqttd.toml            "$STAGE/etc/csqtt/csqttd.toml"

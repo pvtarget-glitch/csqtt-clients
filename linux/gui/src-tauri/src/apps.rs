@@ -229,7 +229,7 @@ pub fn exec_arguments(exec: &str) -> Vec<String> {
     words
 }
 
-fn csqtt_binary() -> PathBuf {
+pub fn csqtt_binary() -> PathBuf {
     for dir in std::env::var("PATH").unwrap_or_default().split(':') {
         let candidate = Path::new(dir).join("csqtt");
         if candidate.is_file() {
