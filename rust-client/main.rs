@@ -12,6 +12,7 @@ pub mod dtls;
 mod events;
 mod logging;
 mod namegen;
+mod netbind;
 mod obfs;
 mod packet;
 mod profiles;
@@ -119,6 +120,9 @@ struct Arguments {
     salt: String,
     #[arg(long, default_value = "")]
     tun_uds: String,
+    /// Привязать исходящие сокеты ядра к интерфейсу (имя; на Windows — индекс).
+    #[arg(long = "bind-interface", default_value = "")]
+    bind_interface: String,
     #[arg(long, default_value_t = false)]
     validate_vk_hashes: bool,
     #[arg(long = "domain-routing", default_value_t = false)]
@@ -218,6 +222,7 @@ fn runtime_worker_threads_with_limit(
 }
 
 async fn run(arguments: Arguments) -> Result<i32> {
+    netbind::configure(&arguments.bind_interface)?;
     if arguments.validate_vk_hashes {
         run_vk_hash_validation(&arguments).await?;
         return Ok(EXIT_NORMAL);
@@ -578,6 +583,7 @@ fn normalize_cli_argument(argument: String) -> String {
         "gen",
         "salt",
         "tun-uds",
+        "bind-interface",
         "validate-vk-hashes",
         "domain-routing",
         "exclude-ru-zones",

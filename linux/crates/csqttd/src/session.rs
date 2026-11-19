@@ -590,6 +590,8 @@ impl Session {
                         worker,
                         server,
                         since,
+                        bytes_up: 0,
+                        bytes_down: 0,
                     });
                     status.streams.sort_by_key(|stream| stream.worker);
                 });
@@ -606,16 +608,20 @@ impl Session {
                     let known = std::mem::take(&mut status.streams);
                     status.streams = streams
                         .into_iter()
-                        .map(|(worker, server, seconds)| {
+                        .map(|report| {
                             let since = known
                                 .iter()
-                                .find(|old| old.worker == worker && old.server == server)
+                                .find(|old| {
+                                    old.worker == report.worker && old.server == report.server
+                                })
                                 .map(|old| old.since)
-                                .unwrap_or_else(|| now.saturating_sub(seconds * 1000));
+                                .unwrap_or_else(|| now.saturating_sub(report.seconds * 1000));
                             StreamInfo {
-                                worker,
-                                server,
+                                worker: report.worker,
+                                server: report.server,
                                 since,
+                                bytes_up: report.bytes_up,
+                                bytes_down: report.bytes_down,
                             }
                         })
                         .collect();

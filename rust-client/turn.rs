@@ -782,7 +782,11 @@ async fn connect_transport(
                     } else {
                         SocketAddr::from(([0u16; 8], 0))
                     };
-                    let socket = Arc::new(UdpSocket::bind(bind).await.context("TURN UDP bind")?);
+                    let socket = Arc::new(
+                        crate::netbind::udp_bind(bind)
+                            .await
+                            .context("TURN UDP bind")?,
+                    );
                     configure_udp_socket_buffers(&socket);
                     socket
                         .connect(server)

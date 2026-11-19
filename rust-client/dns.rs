@@ -9,7 +9,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tokio::{net::UdpSocket, time::timeout};
+use tokio::time::timeout;
 
 const YANDEX_DNS_SERVERS: [SocketAddr; 2] = [
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(77, 88, 8, 8)), 53),
@@ -309,7 +309,7 @@ async fn query_tier(
 }
 
 async fn query_dns_server(server: SocketAddr, query: Vec<u8>, query_id: u16) -> Result<DnsAnswer> {
-    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
+    let socket = crate::netbind::udp_bind((Ipv4Addr::UNSPECIFIED, 0).into())
         .await
         .context("создание UDP-сокета DNS")?;
     socket
@@ -518,6 +518,7 @@ pub async fn resolve_socket(address: &str) -> Result<SocketAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::net::UdpSocket;
 
     fn answer_packet(query_id: u16) -> Vec<u8> {
         let mut packet = Vec::new();

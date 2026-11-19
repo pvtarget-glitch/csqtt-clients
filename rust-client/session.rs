@@ -172,6 +172,8 @@ struct TransportShared {
     recv_cipher: ArcSwap<SessionCipher>,
     config: ObfsConfig,
     pool: Arc<PacketPool>,
+    /// Байты этого потока на проводе (с обфускацией и SRTP).
+    counters: Arc<crate::stats::StreamCounters>,
 }
 
 struct TransportWriter {
@@ -835,9 +837,10 @@ impl ActiveConnection {
         worker: usize,
         incarnation: u64,
         server: std::net::SocketAddr,
+        counters: Arc<crate::stats::StreamCounters>,
     ) -> Self {
         stats.active_connections.fetch_add(1, Ordering::Relaxed);
-        stats.stream_up(worker, incarnation, server);
+        stats.stream_up(worker, incarnation, server, counters);
         events.stream_up(worker, &server.to_string());
         Self {
             stats,
@@ -881,6 +884,7 @@ impl TransportWriter {
             .cipher
             .load()
             .wrap(&mut packet, &self.shared.config, &self.write_state)?;
+        self.shared.counters.add_up(packet.len());
         self.shared.allocation.send(packet).await?;
         if let Some(mut copy) = echo_packet
             && self
@@ -890,6 +894,7 @@ impl TransportWriter {
                 .wrap(&mut copy, &self.shared.config, &self.write_state)
                 .is_ok()
         {
+            self.shared.counters.add_up(copy.len());
             let _ = self.shared.allocation.send(copy).await;
         }
         Ok(())
@@ -949,6 +954,7 @@ impl TransportReader {
                 &mut self.replay,
                 &mut packet,
             ) {
+                self.shared.counters.add_down(packet.len());
                 return Ok(packet);
             }
         }
@@ -1095,6 +1101,7 @@ async fn run_allocated_session(
         recv_cipher: ArcSwap::new(Arc::new(SessionCipher::Plain)),
         config: ObfsConfig::new(config.mode),
         pool: runtime.pool.clone(),
+        counters: Arc::new(crate::stats::StreamCounters::default()),
     });
     let mut writer_transport = TransportWriter::new(shared.clone());
     let mut reader_transport = TransportReader::new(shared.clone(), turn_receiver);
@@ -1173,6 +1180,7 @@ async fn run_allocated_session(
         config.id,
         incarnation_id,
         allocation.server_addr(),
+        shared.counters.clone(),
     );
     let mut writer = tokio::spawn(writer_loop(
         writer_transport,

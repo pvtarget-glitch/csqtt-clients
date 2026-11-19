@@ -669,7 +669,7 @@ fn build_browser_client(
     os: ImpersonateOS,
     captcha_order: bool,
 ) -> Result<Client> {
-    let mut builder = Client::builder()
+    let mut builder = crate::netbind::http(Client::builder())
         .impersonate(browser)
         .impersonate_os(os)
         .timeout(Duration::from_secs(20))

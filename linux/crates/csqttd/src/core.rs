@@ -254,6 +254,16 @@ fn sanitize_list(items: &[String]) -> String {
         .join(",")
 }
 
+/// Поток из события STREAMS.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamReport {
+    pub worker: u32,
+    pub server: String,
+    pub seconds: u64,
+    pub bytes_up: u64,
+    pub bytes_down: u64,
+}
+
 /// Событие ядра из строки stdout.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CoreEvent {
@@ -290,9 +300,9 @@ pub enum CoreEvent {
     StreamDown {
         worker: u32,
     },
-    /// Полный список потоков: (номер, узел VK, секунд в работе).
+    /// Полный список потоков.
     Streams {
-        streams: Vec<(u32, String, u64)>,
+        streams: Vec<StreamReport>,
     },
     ActiveZero,
     TunLost,
@@ -395,11 +405,15 @@ pub fn parse_stdout_line(line: &str) -> Option<CoreEvent> {
                     items
                         .iter()
                         .filter_map(|item| {
-                            Some((
-                                item.get("worker")?.as_u64()? as u32,
-                                item.get("server")?.as_str()?.to_owned(),
-                                item.get("seconds").and_then(Value::as_u64).unwrap_or(0),
-                            ))
+                            let number =
+                                |key: &str| item.get(key).and_then(Value::as_u64).unwrap_or(0);
+                            Some(StreamReport {
+                                worker: item.get("worker")?.as_u64()? as u32,
+                                server: item.get("server")?.as_str()?.to_owned(),
+                                seconds: number("seconds"),
+                                bytes_up: number("bytes_up"),
+                                bytes_down: number("bytes_down"),
+                            })
                         })
                         .collect()
                 })
@@ -514,7 +528,13 @@ mod tests {
                 r#"__CSQTT_EVENT__|STREAMS|{"streams":[{"worker":1,"server":"a:1","seconds":5},{"bad":1}]}"#
             ),
             Some(CoreEvent::Streams {
-                streams: vec![(1, "a:1".into(), 5)]
+                streams: vec![StreamReport {
+                    worker: 1,
+                    server: "a:1".into(),
+                    seconds: 5,
+                    bytes_up: 0,
+                    bytes_down: 0,
+                }]
             })
         );
     }

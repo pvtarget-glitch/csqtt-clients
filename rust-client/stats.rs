@@ -23,6 +23,31 @@ struct StreamEntry {
     incarnation: u64,
     server: SocketAddr,
     since: Instant,
+    counters: Arc<StreamCounters>,
+}
+
+/// Байты одного потока на проводе: отправлено на узел VK и принято от него.
+#[derive(Default, Debug)]
+pub struct StreamCounters {
+    up: std::sync::atomic::AtomicU64,
+    down: std::sync::atomic::AtomicU64,
+}
+
+impl StreamCounters {
+    pub fn add_up(&self, bytes: usize) {
+        self.up.fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    pub fn add_down(&self, bytes: usize) {
+        self.down.fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    pub fn get(&self) -> (u64, u64) {
+        (
+            self.up.load(Ordering::Relaxed),
+            self.down.load(Ordering::Relaxed),
+        )
+    }
 }
 
 /// Состояние одного рабочего потока для события STREAMS.
@@ -31,6 +56,8 @@ pub struct StreamSnapshot {
     pub worker: usize,
     pub server: String,
     pub seconds: u64,
+    pub bytes_up: u64,
+    pub bytes_down: u64,
 }
 
 /// Снимок потоков уходит раз в столько тиков (по 500 мс).
@@ -43,13 +70,20 @@ impl Stats {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    pub fn stream_up(&self, worker: usize, incarnation: u64, server: SocketAddr) {
+    pub fn stream_up(
+        &self,
+        worker: usize,
+        incarnation: u64,
+        server: SocketAddr,
+        counters: Arc<StreamCounters>,
+    ) {
         self.streams().insert(
             worker,
             StreamEntry {
                 incarnation,
                 server,
                 since: Instant::now(),
+                counters,
             },
         );
     }
@@ -69,10 +103,15 @@ impl Stats {
     pub fn stream_snapshot(&self) -> Vec<StreamSnapshot> {
         self.streams()
             .iter()
-            .map(|(worker, entry)| StreamSnapshot {
-                worker: *worker,
-                server: entry.server.to_string(),
-                seconds: entry.since.elapsed().as_secs(),
+            .map(|(worker, entry)| {
+                let (bytes_up, bytes_down) = entry.counters.get();
+                StreamSnapshot {
+                    worker: *worker,
+                    server: entry.server.to_string(),
+                    seconds: entry.since.elapsed().as_secs(),
+                    bytes_up,
+                    bytes_down,
+                }
             })
             .collect()
     }
@@ -117,16 +156,20 @@ mod tests {
     fn stream_registry_tracks_incarnations() {
         let stats = Stats::default();
         let server = "1.2.3.4:3478".parse().unwrap();
-        stats.stream_up(3, 1, server);
-        stats.stream_up(5, 2, server);
+        let counters = std::sync::Arc::new(super::StreamCounters::default());
+        counters.add_up(100);
+        counters.add_down(250);
+        stats.stream_up(3, 1, server, Default::default());
+        stats.stream_up(5, 2, server, counters);
         assert_eq!(stats.stream_snapshot().len(), 2);
         // Новое воплощение воркера 3 заменило старое: старое не снимает запись.
-        stats.stream_up(3, 7, server);
+        stats.stream_up(3, 7, server, Default::default());
         assert_eq!(stats.stream_down(3, 1), None);
         assert_eq!(stats.stream_down(3, 7), Some(0));
         let snapshot = stats.stream_snapshot();
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].worker, 5);
         assert_eq!(snapshot[0].server, "1.2.3.4:3478");
+        assert_eq!((snapshot[0].bytes_up, snapshot[0].bytes_down), (100, 250));
     }
 }

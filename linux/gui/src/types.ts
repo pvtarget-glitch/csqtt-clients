@@ -105,6 +105,8 @@ export interface StreamInfo {
   worker: number;
   server: string;
   since: number;
+  bytes_up: number;
+  bytes_down: number;
 }
 
 /** Установленное приложение из .desktop-файла. */

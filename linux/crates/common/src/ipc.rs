@@ -96,6 +96,11 @@ pub struct StreamInfo {
     pub server: String,
     /// Unix-время в миллисекундах, с которого поток работает.
     pub since: u64,
+    /// Байты на проводе (ядро 2.5.0+linux.2 и новее; иначе 0).
+    #[serde(default)]
+    pub bytes_up: u64,
+    #[serde(default)]
+    pub bytes_down: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

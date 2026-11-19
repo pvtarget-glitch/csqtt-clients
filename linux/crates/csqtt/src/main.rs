@@ -455,13 +455,15 @@ fn print_streams(streams: &[StreamInfo]) {
         return;
     }
     let now = unix_now() * 1000;
-    println!("\n  Поток  Узел VK                  В работе");
+    println!("\n  Поток  Узел VK                  В работе  Отправлено  Получено");
     for stream in streams {
         println!(
-            "  #{:<5} {:<24} {}",
+            "  #{:<5} {:<24} {:<9} {:>10}  {:>8}",
             stream.worker,
             stream.server,
-            format_duration(now.saturating_sub(stream.since) / 1000)
+            format_duration(now.saturating_sub(stream.since) / 1000),
+            format_bytes(stream.bytes_up),
+            format_bytes(stream.bytes_down)
         );
     }
 }
@@ -718,6 +720,8 @@ mod tests {
             worker,
             server: server.into(),
             since: 0,
+            bytes_up: 0,
+            bytes_down: 0,
         };
         let servers = stream_servers(&[
             stream(1, "95.142.0.2:443"),

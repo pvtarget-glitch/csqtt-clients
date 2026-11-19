@@ -31,7 +31,7 @@ Linux-клиент туннеля [CSQTT](https://github.com/amurcanov/csqtt): �
 Готовый пакет — в разделе [Releases](https://github.com/pvtarget-glitch/csqtt-linux/releases).
 
 ```bash
-sudo apt install ./csqtt-linux_0.5.0+core2.5.0+linux.1_amd64.deb
+sudo apt install ./csqtt-linux_0.6.0+core2.5.0+linux.2_amd64.deb
 ```
 
 Пакет создаёт пользователя `csqtt-core` и группу `csqtt`, добавляет в группу того, кто ставил через `sudo`, и запускает `csqttd`. После установки в меню приложений появляется «csqtt». Пакет собирается на Ubuntu 22.04 и ставится на Ubuntu 22.04+, Mint 21+ и Debian 12+. Для систем старше собери из исходников на них же; программам мимо туннеля там может не хватить cgroup v2.
@@ -179,6 +179,7 @@ ips = ["192.0.2.0/24"]
 Отличия от ядра 2.5.0:
 
 - **linux.1** — ядро принимает TUN-fd только от процесса со своим UID или от root (`SO_PEERCRED`). Ещё один UID можно разрешить переменной `CSQTT_TUN_PEER_UID`. Новые события `STREAM_UP`, `STREAM_DOWN` и `STREAMS` (раз в 5 секунд) сообщают, через какой узел VK идёт каждый поток. Служба работает и со старым ядром — тогда список узлов пуст.
+- **linux.2** — трафик по каждому потоку: событие `STREAMS` несёт `bytes_up`/`bytes_down` (байты на проводе, с обфускацией). Ключ `--bind-interface` привязывает все исходящие сокеты ядра (TURN, API VK, DNS, прямые соединения) к интерфейсу: `IP_BOUND_IF` на macOS, `IP_UNICAST_IF` на Windows, `SO_BINDTODEVICE` на Linux. Это задел для macOS и Windows, где нет правила `ip rule uidrange`; на Linux служба его не использует.
 
 ## Обновление ядра
 
@@ -209,7 +210,7 @@ CSQTT_CORE_BIN="$PWD/dist/csqtt-core" cargo test -p csqttd -- --ignored
 
 - Модульные тесты: `cargo test`.
 - Формат ссылок сверен с независимой реализацией алгоритма из Kotlin-кода: `python3 tests/link_compat.py target/debug/csqtt`.
-- Сетевая часть (TUN, передача fd, правила, DNS через resolv.conf, перезапуски, капча, права на сокет) — `sudo tests/integration.sh`: 110 проверок в отдельном network namespace с имитатором ядра.
+- Сетевая часть (TUN, передача fd, правила, DNS через resolv.conf, перезапуски, капча, права на сокет) — `sudo tests/integration.sh`: 111 проверок в отдельном network namespace с имитатором ядра.
 - На настоящем сервере csqtt 2.5.0 из командной строки: туннель поднимается, ядро получает TUN-интерфейс и конфигурацию, DNS ставится через resolv.conf.
 - Окно под виртуальным дисплеем на стенде `tests/gui-env.sh`: добавление сервера по ссылке, подключение и отключение, состояния ошибки и проверки VK, журнал, запись автозапуска, запрет второго экземпляра.
 - Настоящее ядро 2.5.0: принимает аргументы демона, получает TUN-fd, останавливается по `STOP`.

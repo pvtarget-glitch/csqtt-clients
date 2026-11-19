@@ -11,7 +11,6 @@ use std::{
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf},
-    net::TcpStream,
     sync::{mpsc, watch},
     time::{Duration, timeout},
 };
@@ -57,7 +56,7 @@ pub async fn connect(
     TurnStreamReader,
     TurnStreamWriteFailure,
 )> {
-    let socket = timeout(STREAM_CONNECT_TIMEOUT, TcpStream::connect(server))
+    let socket = timeout(STREAM_CONNECT_TIMEOUT, crate::netbind::tcp_connect(server))
         .await
         .context("TURN TCP connect timed out")?
         .with_context(|| format!("TURN {} connect {server}", endpoint.transport.as_str()))?;

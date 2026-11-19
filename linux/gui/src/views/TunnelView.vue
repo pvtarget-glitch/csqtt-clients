@@ -87,20 +87,25 @@ interface NodeRow {
   host: string;
   streams: number;
   oldest: number;
+  bytes: number;
 }
 
 // Потоки по узлам VK: какой узел держит больше потоков и как давно.
+// Трафик по узлам сообщает ядро 2.5.0+linux.2; у старого ядра колонки нет.
 const nodes = computed<NodeRow[]>(() => {
   const rows = new Map<string, NodeRow>();
   for (const stream of status.value?.streams ?? []) {
     const host = stream.server.replace(/:\d+$/, "");
-    const row = rows.get(host) ?? { host, streams: 0, oldest: stream.since };
+    const row = rows.get(host) ?? { host, streams: 0, oldest: stream.since, bytes: 0 };
     row.streams += 1;
+    row.bytes += (stream.bytes_up ?? 0) + (stream.bytes_down ?? 0);
     row.oldest = Math.min(row.oldest, stream.since);
     rows.set(host, row);
   }
   return [...rows.values()].sort((a, b) => b.streams - a.streams || a.host.localeCompare(b.host));
 });
+
+const hasTraffic = computed(() => nodes.value.some((node) => node.bytes > 0));
 
 function nodeAge(since: number): string {
   return formatDuration(Math.max(0, Math.floor((now.value - since) / 1000)));
@@ -191,6 +196,7 @@ const needsHashes = computed(
                   <th scope="col">Узел</th>
                   <th scope="col">Потоков</th>
                   <th scope="col">Дольше всех</th>
+                  <th v-if="hasTraffic" scope="col">Трафик</th>
                 </tr>
               </thead>
               <tbody>
@@ -198,6 +204,7 @@ const needsHashes = computed(
                   <td class="selectable mono">{{ node.host }}</td>
                   <td>{{ node.streams }}</td>
                   <td>{{ nodeAge(node.oldest) }}</td>
+                  <td v-if="hasTraffic">{{ formatBytes(node.bytes) }}</td>
                 </tr>
               </tbody>
             </table>

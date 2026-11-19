@@ -166,7 +166,7 @@ def main():
                 {"worker": 1, "server": "155.212.0.1:3478", "seconds": 0},
                 {"worker": 3, "server": "155.212.0.1:3478", "seconds": 0},
                 {"worker": 4, "server": "95.142.0.2:443", "seconds": 0},
-                {"worker": 5, "server": "95.142.0.2:443", "seconds": 120},
+                {"worker": 5, "server": "95.142.0.2:443", "seconds": 120, "bytes_up": 3145728, "bytes_down": 52428800},
             ]})
         if SCENARIO == "restart" and GENERATION == 1 and received and time.time() - started > 1.5:
             log("simulated TUN loss exit")

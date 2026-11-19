@@ -222,6 +222,7 @@ STREAMS_JSON="$(csqtt status --json | python3 -c 'import json,sys; print(" ".joi
 check "потоки по узлам VK из событий ядра" test "$STREAMS_JSON" = "1@155.212.0.1:3478 3@155.212.0.1:3478 4@95.142.0.2:443 5@95.142.0.2:443"
 contains "сводка узлов VK в status" "Узлы VK:      155.212.0.1 ×2, 95.142.0.2 ×2" "$(csqtt status)"
 contains "status --streams показывает поток" "#5     95.142.0.2:443           00:02:0" "$(csqtt status --streams)"
+contains "трафик потока от ядра" "3.0 МБ   50.0 МБ" "$(csqtt status --streams)"
 contains "журнал с начала сессии" "ядро запущено (поколение 1" "$(csqtt logs -n 0 | head -1)"
 check "csqtt logs | head завершается без падения" bash -c "ip netns exec $NS env CSQTT_SOCKET=$WORK/run/csqttd.sock $BIN/csqtt logs -n 0 | head -1 >/dev/null; test \${PIPESTATUS[0]} != 134"
 check "повторный up отклонён" bash -c "! ip netns exec $NS env CSQTT_SOCKET=$WORK/run/csqttd.sock CSQTT_CONFIG_DIR=$WORK/config $BIN/csqtt up ok"

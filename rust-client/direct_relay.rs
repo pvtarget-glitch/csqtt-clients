@@ -370,7 +370,7 @@ impl DirectRelay {
                     tokio::spawn(async move {
                         let connect_res = tokio::time::timeout(
                             Duration::from_secs(5),
-                            tokio::net::TcpStream::connect(remote_addr),
+                            crate::netbind::tcp_connect(remote_addr),
                         )
                         .await;
 
@@ -749,7 +749,9 @@ impl DirectRelay {
             } else {
                 "0.0.0.0:0"
             };
-            let Ok(new_sock) = tokio::net::UdpSocket::bind(bind_addr).await else {
+            let Ok(new_sock) =
+                crate::netbind::udp_bind(bind_addr.parse().expect("адрес привязки")).await
+            else {
                 return false;
             };
             let socket_ref = socket2::SockRef::from(&new_sock);
@@ -881,7 +883,7 @@ impl DirectRelay {
 
         tokio::spawn(async move {
             let _permit = permit;
-            let socket = match tokio::net::UdpSocket::bind("0.0.0.0:0").await {
+            let socket = match crate::netbind::udp_bind(([0, 0, 0, 0], 0).into()).await {
                 Ok(s) => s,
                 Err(_) => return,
             };

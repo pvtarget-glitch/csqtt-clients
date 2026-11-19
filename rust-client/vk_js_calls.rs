@@ -66,7 +66,7 @@ pub async fn start(
     if bootstrap.token.trim().is_empty() {
         bail!("VK access token отсутствует");
     }
-    let client = Client::builder()
+    let client = crate::netbind::http(Client::builder())
         .impersonate(profile.impersonate)
         .impersonate_os(profile.os)
         .timeout(Duration::from_secs(15))
