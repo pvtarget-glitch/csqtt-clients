@@ -117,6 +117,7 @@ pub async fn start(shared: &Arc<Shared>, profile: Profile) -> Result<(), String>
     let (control, receiver) = mpsc::channel(16);
     let peer = profile.peer();
     let name = profile.name.clone();
+    let selected_only = profile.selected_apps_only;
     let workers = profile.normalized_workers();
     shared.reset_logs();
     shared.update_status(|status| {
@@ -125,6 +126,7 @@ pub async fn start(shared: &Arc<Shared>, profile: Profile) -> Result<(), String>
         status.state = State::Connecting;
         status.profile = Some(name);
         status.peer = Some(peer);
+        status.selected_only = selected_only;
     });
     let session = Session {
         shared: shared.clone(),
@@ -710,7 +712,12 @@ impl Session {
         self.shared.update_status(|status| {
             status.state = State::Connected;
             status.tunnel_ip = Some(conf.ip.to_string());
-            status.dns = conf.dns.iter().map(ToString::to_string).collect();
+            // В режиме «только выбранные программы» DNS системы не меняется.
+            status.dns = if status.selected_only {
+                Vec::new()
+            } else {
+                conf.dns.iter().map(ToString::to_string).collect()
+            };
             status.interface = Some(interface);
             status.last_error = None;
             status.connected_since.get_or_insert(now_millis() / 1000);
@@ -729,7 +736,8 @@ impl Session {
         let direct = self.direct_networks();
         tokio::task::block_in_place(|| {
             if self.network.is_none() {
-                let params = NetParams::from_config(&shared.config, shared.identity.uid);
+                let mut params = NetParams::from_config(&shared.config, shared.identity.uid);
+                params.selected_only = self.profile.selected_apps_only;
                 let network = Network::create(params)
                     .map_err(|error| format!("не удалось создать TUN: {error:#}"))?;
                 self.network = Some(network);

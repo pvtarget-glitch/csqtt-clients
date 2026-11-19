@@ -85,6 +85,13 @@ enum Command {
     },
     /// Фоновый помощник графической сессии: окно капчи и уведомления
     Agent,
+    /// Запустить программу через туннель — для профилей «только выбранные
+    /// программы» (selected_apps_only): `csqtt tunnel -- firefox`
+    Tunnel {
+        /// Программа и её аргументы
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
     /// Сервер csqtt на VPS: установка и удаление по SSH
     #[command(subcommand)]
     Server(server::ServerCommand),
@@ -173,7 +180,8 @@ fn run(command: Command) -> Result<()> {
         Command::Status { json, streams } => status(json, streams),
         Command::Logs { lines, follow } => logs(lines, follow),
         Command::Agent => agent(),
-        Command::Direct { command } => direct(&command),
+        Command::Direct { command } => direct(&command, Request::Direct),
+        Command::Tunnel { command } => direct(&command, Request::Tunnel),
         Command::Server(command) => server::run(command),
     }
 }
@@ -325,7 +333,9 @@ fn print_status(status: &Status) {
         println!(
             "Туннель:      {ip} через {}, DNS {}",
             status.interface.as_deref().unwrap_or("?"),
-            if status.dns.is_empty() {
+            if status.selected_only {
+                "системы (не меняется)".to_owned()
+            } else if status.dns.is_empty() {
                 "—".to_owned()
             } else {
                 status.dns.join(", ")
@@ -373,6 +383,12 @@ fn print_status(status: &Status) {
     }
     if status.restarts > 0 {
         println!("Перезапусков: {}", status.restarts);
+    }
+    if status.selected_only && status.state.is_active() {
+        println!(
+            "Режим:        через туннель только выбранные программы (процессов {})",
+            status.tunnel_processes
+        );
     }
     if status.direct_processes > 0 {
         println!("Мимо туннеля: процессов {}", status.direct_processes);
@@ -452,10 +468,10 @@ fn print_streams(streams: &[StreamInfo]) {
 
 /// Переносит текущий процесс в группу «мимо туннеля» и заменяет его
 /// программой: дочерние процессы остаются в той же группе.
-fn direct(command: &[String]) -> Result<()> {
+fn direct(command: &[String], request: Request) -> Result<()> {
     use std::os::unix::process::CommandExt;
     let mut client = Client::connect(&client::socket_path())?;
-    client.call(&Request::Direct)?;
+    client.call(&request)?;
     drop(client);
     let error = std::process::Command::new(&command[0])
         .args(&command[1..])

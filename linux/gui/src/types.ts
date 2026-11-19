@@ -33,6 +33,8 @@ export interface Status {
   diagnosis: string | null;
   streams: StreamInfo[];
   direct_processes: number;
+  tunnel_processes: number;
+  selected_only: boolean;
   direct_unavailable: string | null;
   dead_hashes: string[];
   captcha: CaptchaRequest | null;
@@ -80,6 +82,8 @@ export interface Profile {
   custom_turn_ips: string;
   routing: Routing;
   persistent: boolean;
+  /** Через туннель только программы из вкладки «Программы» / csqtt tunnel. */
+  selected_apps_only: boolean;
 }
 
 export interface Settings {
@@ -113,4 +117,6 @@ export interface AppEntry {
   categories: string | null;
   /** Есть ярлык «… (мимо туннеля)» в меню. */
   launcher: boolean;
+  /** Есть ярлык «… (через туннель)» в меню. */
+  tunnel_launcher: boolean;
 }

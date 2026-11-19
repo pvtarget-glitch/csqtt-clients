@@ -160,6 +160,7 @@ EOF
 : > "$WORK/config/profiles.toml"
 for scenario in ok captcha fatal crash restart routing tunlost wide silent; do profile "$scenario" "$scenario"; done
 profile persistent crash "persistent = true"
+profile selected ok "selected_apps_only = true"
 
 cat > "$WORK/captcha-stub" <<'EOF'
 #!/bin/sh
@@ -334,6 +335,32 @@ check "после перезапуска снова подключено" test "
 contains "интерфейс не снимался" "10.99.0.2/32" "$(ns ip -4 addr show dev $IFACE)"
 ns ip route replace default via 10.250.0.1 dev itv1
 csqtt down >/dev/null
+
+echo "== только выбранные программы"
+csqtt up selected >/dev/null 2>&1
+wait_state connected 10
+check "профиль «только выбранные» подключён" test "$(state)" = connected
+TUNNEL_MARK="$(printf '%#x' $((TABLE + 1)))"
+contains "в туннель только помеченное" "fwmark $TUNNEL_MARK lookup $TABLE" "$(ns ip -4 rule list)"
+absent "нет общего правила «всё в туннель»" "from all lookup $TABLE" "$(ns ip -4 rule list)"
+check "DNS системы не менялся" test "$(ns cat /etc/resolv.conf)" = "nameserver 9.9.9.9"
+contains "режим виден в status" "только выбранные программы" "$(csqtt status)"
+ip addr add 198.51.100.88/32 dev itv0
+python3 "$WORK/udp-echo.py" > "$WORK/echo.out" &
+ECHO_PID=$!
+sleep 0.3
+ns python3 "$WORK/udp-ping.py" >/dev/null 2>&1
+wait "$ECHO_PID"
+contains "обычная программа идёт напрямую" "src=10.250.0.2" "$(cat "$WORK/echo.out")"
+absent "обычная программа не попала в ядро" "dst=198.51.100.88" "$(core_log)"
+TUNNEL_OUT="$(ns setpriv --reuid "$IT_USER" --regid "$IT_USER" --init-groups env CSQTT_SOCKET="$WORK/run/csqttd.sock" "$WORK/csqtt-client" tunnel -- python3 "$WORK/udp-ping.py" 2>&1)"
+sleep 0.3
+contains "csqtt tunnel: пакет ушёл в туннель" "dst=198.51.100.88" "$(core_log)"
+contains "адрес источника — адрес туннеля" "dst=198.51.100.88 src=10.99.0.2" "$(core_log)"
+contains "в журнале службы видно, кто пошёл через туннель" "идёт через туннель" "$(csqtt logs -n 0)"
+ip addr del 198.51.100.88/32 dev itv0
+csqtt down >/dev/null
+absent "после отключения правила сняты" "lookup $TABLE" "$(ns ip -4 rule list)"
 
 echo "== сервер молчит"
 csqtt up silent >/dev/null 2>&1 &

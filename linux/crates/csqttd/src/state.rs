@@ -57,6 +57,8 @@ pub struct Shared {
     next_connection: AtomicU64,
     /// Процессы мимо туннеля и их потомки.
     pub direct: crate::bypass::Keeper,
+    /// Процессы через туннель (профили «только выбранные программы»).
+    pub tunneled: crate::bypass::Keeper,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -85,6 +87,8 @@ pub fn idle_status() -> Status {
         active_workers: 0,
         streams: Vec::new(),
         direct_processes: 0,
+        tunnel_processes: 0,
+        selected_only: false,
         direct_unavailable: None,
         workers_target: 0,
         bytes_up: 0,
@@ -111,7 +115,8 @@ impl Shared {
             logs: Mutex::new(LogBuffer::default()),
             captcha_handlers: Mutex::new(Vec::new()),
             next_connection: AtomicU64::new(1),
-            direct: crate::bypass::Keeper::default(),
+            direct: crate::bypass::Keeper::new(crate::bypass::Group::Direct),
+            tunneled: crate::bypass::Keeper::new(crate::bypass::Group::Tunnel),
         }
     }
 
@@ -120,7 +125,8 @@ impl Shared {
         status.captcha_handlers = lock(&self.captcha_handlers).len() as u32;
         let bypass = crate::bypass::BypassParams::from_config(&self.config);
         status.direct_unavailable = bypass.unavailable_reason();
-        status.direct_processes = bypass.process_count();
+        status.direct_processes = bypass.process_count(crate::bypass::Group::Direct);
+        status.tunnel_processes = bypass.process_count(crate::bypass::Group::Tunnel);
         status
     }
 

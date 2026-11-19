@@ -51,7 +51,7 @@ def tun_reader(fd, index):
         except OSError:
             return
         if packet and packet[0] >> 4 == 4:
-            log("TUN#%d packet %d bytes dst=%s" % (index, len(packet), socket.inet_ntoa(packet[16:20])))
+            log("TUN#%d packet %d bytes dst=%s src=%s" % (index, len(packet), socket.inet_ntoa(packet[16:20]), socket.inet_ntoa(packet[12:16])))
 
 
 def fd_listener(name):

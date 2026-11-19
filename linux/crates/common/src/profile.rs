@@ -106,6 +106,10 @@ pub struct Profile {
     /// если ядро ни разу не подключилось (сеть появится позже).
     #[serde(default)]
     pub persistent: bool,
+    /// Через туннель только программы, запущенные через «Программы» или
+    /// `csqtt tunnel`; остальное и DNS системы — напрямую.
+    #[serde(default)]
+    pub selected_apps_only: bool,
 }
 
 impl Profile {
@@ -128,6 +132,7 @@ impl Profile {
             custom_turn_ips: String::new(),
             routing: Routing::default(),
             persistent: false,
+            selected_apps_only: false,
         }
     }
 

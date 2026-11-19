@@ -52,6 +52,9 @@ pub struct DaemonConfig {
     pub cgroup_root: PathBuf,
     /// cgroup для приложений мимо туннеля (`csqtt direct`), от корня.
     pub bypass_cgroup: String,
+    /// cgroup для приложений через туннель (`csqtt tunnel`) в профилях
+    /// «только выбранные программы».
+    pub tunnel_cgroup: String,
 }
 
 impl Default for DaemonConfig {
@@ -72,6 +75,7 @@ impl Default for DaemonConfig {
             log_lines: 2000,
             cgroup_root: "/sys/fs/cgroup".into(),
             bypass_cgroup: "csqtt-direct".into(),
+            tunnel_cgroup: "csqtt-tunnel".into(),
         }
     }
 }
@@ -112,8 +116,19 @@ impl DaemonConfig {
         if self.rule_priority == 0 || self.rule_priority > 32000 {
             bail!("rule_priority: ожидается 1..32000");
         }
-        if !crate::bypass::valid_cgroup_name(&self.bypass_cgroup) {
-            bail!("bypass_cgroup: относительный путь из латиницы, цифр, «-», «_», «.»");
+        for (key, value) in [
+            ("bypass_cgroup", &self.bypass_cgroup),
+            ("tunnel_cgroup", &self.tunnel_cgroup),
+        ] {
+            if !crate::bypass::valid_cgroup_name(value) {
+                bail!("{key}: относительный путь из латиницы, цифр, «-», «_», «.»");
+            }
+        }
+        if self.bypass_cgroup == self.tunnel_cgroup {
+            bail!("bypass_cgroup и tunnel_cgroup должны различаться");
+        }
+        if self.table == u32::MAX {
+            bail!("table: слишком большой номер");
         }
         if self.core_user.is_empty() || self.core_user == "root" {
             bail!("core_user: нужен отдельный непривилегированный пользователь");

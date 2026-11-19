@@ -1,5 +1,6 @@
-//! Приложения мимо туннеля: список установленных программ из .desktop-файлов,
-//! запуск через `csqtt direct` и ярлыки «… (мимо туннеля)» в меню.
+//! Программы мимо туннеля и через туннель: список установленных программ
+//! из .desktop-файлов, запуск через `csqtt direct` / `csqtt tunnel` и ярлыки
+//! «… (мимо туннеля)» / «… (через туннель)» в меню.
 
 use serde::Serialize;
 use std::{
@@ -7,8 +8,42 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Префикс ярлыков, которые создаёт окно.
+/// Префиксы ярлыков, которые создаёт окно.
 const LAUNCHER_PREFIX: &str = "csqtt-direct-";
+const TUNNEL_LAUNCHER_PREFIX: &str = "csqtt-tunnel-";
+
+/// Как запускать программу.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Mode {
+    /// `csqtt direct`: мимо туннеля.
+    Direct,
+    /// `csqtt tunnel`: через туннель (профиль «только выбранные программы»).
+    Tunnel,
+}
+
+impl Mode {
+    fn prefix(self) -> &'static str {
+        match self {
+            Mode::Direct => LAUNCHER_PREFIX,
+            Mode::Tunnel => TUNNEL_LAUNCHER_PREFIX,
+        }
+    }
+
+    fn subcommand(self) -> &'static str {
+        match self {
+            Mode::Direct => "direct",
+            Mode::Tunnel => "tunnel",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Mode::Direct => "мимо туннеля",
+            Mode::Tunnel => "через туннель",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct AppEntry {
@@ -21,6 +56,8 @@ pub struct AppEntry {
     pub categories: Option<String>,
     /// Есть ли ярлык «мимо туннеля» в меню.
     pub launcher: bool,
+    /// Есть ли ярлык «через туннель» в меню.
+    pub tunnel_launcher: bool,
 }
 
 fn home() -> Option<PathBuf> {
@@ -97,12 +134,18 @@ fn is_true(values: &BTreeMap<String, String>, key: &str) -> bool {
     values.get(key).map(String::as_str) == Some("true")
 }
 
-fn entry_from(id: String, text: &str, launchers: &HashSet<String>) -> Option<AppEntry> {
+fn entry_from(
+    id: String,
+    text: &str,
+    launchers: &HashSet<String>,
+    tunnel_launchers: &HashSet<String>,
+) -> Option<AppEntry> {
     let values = parse_entry(text);
     if values.get("Type").map(String::as_str) != Some("Application")
         || is_true(&values, "NoDisplay")
         || is_true(&values, "Hidden")
         || id.starts_with(LAUNCHER_PREFIX)
+        || id.starts_with(TUNNEL_LAUNCHER_PREFIX)
         || id == "csqtt.desktop"
     {
         return None;
@@ -113,6 +156,7 @@ fn entry_from(id: String, text: &str, launchers: &HashSet<String>) -> Option<App
     }
     Some(AppEntry {
         launcher: launchers.contains(&id),
+        tunnel_launcher: tunnel_launchers.contains(&id),
         name: localized(&values, "Name").unwrap_or_else(|| id.trim_end_matches(".desktop").into()),
         exec,
         icon: values.get("Icon").cloned(),
@@ -137,7 +181,7 @@ fn collect(dir: &Path, prefix: &str, found: &mut Vec<(String, PathBuf)>, depth: 
     }
 }
 
-fn existing_launchers() -> HashSet<String> {
+fn existing_launchers(prefix: &str) -> HashSet<String> {
     let Ok(dir) = launcher_dir() else {
         return HashSet::new();
     };
@@ -147,7 +191,7 @@ fn existing_launchers() -> HashSet<String> {
                 .flatten()
                 .filter_map(|entry| {
                     let name = entry.file_name().to_string_lossy().into_owned();
-                    name.strip_prefix(LAUNCHER_PREFIX).map(str::to_owned)
+                    name.strip_prefix(prefix).map(str::to_owned)
                 })
                 .collect()
         })
@@ -155,7 +199,8 @@ fn existing_launchers() -> HashSet<String> {
 }
 
 pub fn list() -> Vec<AppEntry> {
-    let launchers = existing_launchers();
+    let launchers = existing_launchers(LAUNCHER_PREFIX);
+    let tunnel_launchers = existing_launchers(TUNNEL_LAUNCHER_PREFIX);
     let mut seen = HashSet::new();
     let mut apps = Vec::new();
     for dir in application_dirs() {
@@ -169,7 +214,7 @@ pub fn list() -> Vec<AppEntry> {
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            if let Some(entry) = entry_from(id, &text, &launchers) {
+            if let Some(entry) = entry_from(id, &text, &launchers, &tunnel_launchers) {
                 apps.push(entry);
             }
         }
@@ -243,8 +288,8 @@ pub fn csqtt_binary() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/usr/bin/csqtt"))
 }
 
-/// Запускает приложение мимо туннеля.
-pub fn launch(id: &str) -> Result<(), String> {
+/// Запускает приложение мимо туннеля или через туннель.
+pub fn launch(id: &str, mode: Mode) -> Result<(), String> {
     let app = find(id)?;
     let arguments = exec_arguments(&app.exec);
     if arguments.is_empty() {
@@ -252,7 +297,7 @@ pub fn launch(id: &str) -> Result<(), String> {
     }
     let mut command = std::process::Command::new(csqtt_binary());
     command
-        .arg("direct")
+        .arg(mode.subcommand())
         .arg("--")
         .args(&arguments)
         .stdin(std::process::Stdio::null())
@@ -301,13 +346,14 @@ fn quote_argument(argument: &str) -> String {
     quoted
 }
 
-pub fn launcher_text(app: &AppEntry, csqtt: &Path) -> String {
+pub fn launcher_text(app: &AppEntry, csqtt: &Path, mode: Mode) -> String {
     // Аргументы оригинала сохраняются как есть, вместе с field codes.
     let mut text = String::from("[Desktop Entry]\nType=Application\n");
-    text.push_str(&format!("Name={} (мимо туннеля)\n", app.name));
+    text.push_str(&format!("Name={} ({})\n", app.name, mode.label()));
     text.push_str(&format!(
-        "Exec={} direct -- {}\n",
+        "Exec={} {} -- {}\n",
         quote_argument(&csqtt.to_string_lossy()),
+        mode.subcommand(),
         app.exec
     ));
     if let Some(icon) = &app.icon {
@@ -320,16 +366,17 @@ pub fn launcher_text(app: &AppEntry, csqtt: &Path) -> String {
         text.push_str(&format!("Categories={categories}\n"));
     }
     text.push_str(&format!(
-        "Comment=Запуск мимо туннеля csqtt\nX-Csqtt-Direct-Source={}\n",
+        "Comment=Запуск {} csqtt\nX-Csqtt-Source={}\n",
+        mode.label(),
         app.id
     ));
     text
 }
 
-/// Создаёт или убирает ярлык «… (мимо туннеля)» в меню.
-pub fn set_launcher(id: &str, enabled: bool) -> Result<(), String> {
+/// Создаёт или убирает ярлык «… (мимо туннеля)» / «… (через туннель)».
+pub fn set_launcher(id: &str, enabled: bool, mode: Mode) -> Result<(), String> {
     let dir = launcher_dir()?;
-    let path = dir.join(format!("{LAUNCHER_PREFIX}{id}"));
+    let path = dir.join(format!("{}{id}", mode.prefix()));
     if !enabled {
         return match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
@@ -339,7 +386,7 @@ pub fn set_launcher(id: &str, enabled: bool) -> Result<(), String> {
     }
     let app = find(id)?;
     std::fs::create_dir_all(&dir).map_err(|error| format!("{}: {error}", dir.display()))?;
-    std::fs::write(&path, launcher_text(&app, &csqtt_binary()))
+    std::fs::write(&path, launcher_text(&app, &csqtt_binary(), mode))
         .map_err(|error| format!("запись {}: {error}", path.display()))
 }
 
@@ -370,18 +417,34 @@ mod tests {
     #[test]
     fn entries_are_filtered_and_localized() {
         let launchers: HashSet<String> = ["firefox.desktop".to_owned()].into();
+        let none = HashSet::new();
         let text = "[Desktop Entry]\nType=Application\nName=Firefox\nName[ru]=Фаерфокс\nExec=firefox %u\nIcon=firefox\n[Desktop Action new]\nName=Other\nExec=other\n";
-        let entry = entry_from("firefox.desktop".into(), text, &launchers).unwrap();
+        let entry = entry_from("firefox.desktop".into(), text, &launchers, &none).unwrap();
         assert_eq!(entry.name, "Фаерфокс");
         assert_eq!(entry.exec, "firefox %u");
         assert!(entry.launcher);
+        assert!(!entry.tunnel_launcher);
         assert!(entry_from(
             "x.desktop".into(),
             "[Desktop Entry]\nType=Application\nName=X\nExec=x\nNoDisplay=true\n",
-            &launchers
+            &launchers,
+            &none
         )
         .is_none());
-        assert!(entry_from("csqtt-direct-firefox.desktop".into(), text, &launchers).is_none());
+        assert!(entry_from(
+            "csqtt-direct-firefox.desktop".into(),
+            text,
+            &launchers,
+            &none
+        )
+        .is_none());
+        assert!(entry_from(
+            "csqtt-tunnel-firefox.desktop".into(),
+            text,
+            &launchers,
+            &none
+        )
+        .is_none());
     }
 
     #[test]
@@ -394,10 +457,14 @@ mod tests {
             terminal: false,
             categories: Some("Network;WebBrowser;".into()),
             launcher: false,
+            tunnel_launcher: false,
         };
-        let text = launcher_text(&app, Path::new("/usr/bin/csqtt"));
+        let text = launcher_text(&app, Path::new("/usr/bin/csqtt"), Mode::Direct);
         assert!(text.contains("Exec=\"/usr/bin/csqtt\" direct -- firefox %u\n"));
         assert!(text.contains("Name=Firefox (мимо туннеля)\n"));
+        let text = launcher_text(&app, Path::new("/usr/bin/csqtt"), Mode::Tunnel);
+        assert!(text.contains("Exec=\"/usr/bin/csqtt\" tunnel -- firefox %u\n"));
+        assert!(text.contains("Name=Firefox (через туннель)\n"));
         assert!(text.contains("Icon=firefox\n"));
     }
 }

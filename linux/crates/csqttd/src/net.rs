@@ -55,6 +55,8 @@ pub struct NetParams {
     pub core_uid: u32,
     pub runtime_dir: PathBuf,
     pub bypass: BypassParams,
+    /// Профиль «через туннель только выбранные программы».
+    pub selected_only: bool,
 }
 
 impl NetParams {
@@ -69,7 +71,18 @@ impl NetParams {
             core_uid,
             runtime_dir: config.runtime_dir.clone(),
             bypass: BypassParams::from_config(config),
+            selected_only: false,
         }
+    }
+
+    /// Метка пакетов программ мимо туннеля.
+    fn direct_mark(&self) -> u32 {
+        self.table
+    }
+
+    /// Метка пакетов программ через туннель (режим «только выбранные»).
+    fn tunnel_mark(&self) -> u32 {
+        self.table + 1
     }
 
     fn resolv_backup(&self) -> PathBuf {
@@ -155,13 +168,21 @@ impl Network {
 
         if !self.rules_installed {
             self.relax_rp_filter(&mut notes);
-            install_rules(&self.params, "-4")?;
-            match self.install_bypass() {
-                Ok(()) => {}
-                Err(error) => notes.push(format!(
-                    "приложения мимо туннеля (csqtt direct) недоступны: {error:#}"
-                )),
+            let bypass = self.install_bypass();
+            if self.params.selected_only {
+                // Без меток nftables в туннель не попало бы ничего.
+                bypass.map_err(|error| {
+                    anyhow!("режим «только выбранные программы» недоступен: {error:#}")
+                })?;
+                notes.push(
+                    "через туннель идут только программы, запущенные через «Программы» или csqtt tunnel; DNS системы не меняется".into(),
+                );
+            } else if let Err(error) = bypass {
+                notes.push(format!(
+                    "программы мимо туннеля (csqtt direct) недоступны: {error:#}"
+                ));
             }
+            install_rules(&self.params, "-4")?;
             if self.params.ipv6 == Ipv6Mode::Block {
                 if let Err(error) = block_ipv6(&self.params) {
                     notes.push(format!(
@@ -172,7 +193,9 @@ impl Network {
             self.rules_installed = true;
         }
 
-        if self.dns_applied.as_ref().map(|(_, servers)| servers) != Some(&conf.dns) {
+        if !self.params.selected_only
+            && self.dns_applied.as_ref().map(|(_, servers)| servers) != Some(&conf.dns)
+        {
             match self.apply_dns(&conf.dns) {
                 Ok(Some(backend)) => {
                     notes.push(format!(
@@ -230,12 +253,15 @@ impl Network {
         Ok(())
     }
 
-    /// Метка пакетов приложений мимо туннеля — номер таблицы туннеля.
+    /// nftables и правило «метка мимо туннеля → main».
     fn install_bypass(&self) -> Result<()> {
-        let mark = self.params.table;
-        self.params.bypass.install(&self.params.interface, mark)?;
+        self.params.bypass.install(
+            &self.params.interface,
+            self.params.direct_mark(),
+            self.params.tunnel_mark(),
+        )?;
         let priority = self.params.rule_priority.to_string();
-        let mark = mark.to_string();
+        let mark = self.params.direct_mark().to_string();
         ip(&[
             "-4", "rule", "add", "priority", &priority, "fwmark", &mark, "lookup", "main",
         ])?;
@@ -398,15 +424,16 @@ fn install_rules(params: &NetParams, family: &str) -> Result<()> {
         "suppress_prefixlength",
         "0",
     ])?;
-    ip(&[
-        family,
-        "rule",
-        "add",
-        "priority",
-        &priority(2),
-        "lookup",
-        &table,
-    ])?;
+    // Всё в туннель — или только помеченное (режим «выбранные программы»).
+    let tunnel_mark = params.tunnel_mark().to_string();
+    let mut last = vec![family, "rule", "add", "priority"];
+    let last_priority = priority(2);
+    last.push(&last_priority);
+    if params.selected_only {
+        last.extend(["fwmark", &tunnel_mark]);
+    }
+    last.extend(["lookup", &table]);
+    ip(&last)?;
     Ok(())
 }
 

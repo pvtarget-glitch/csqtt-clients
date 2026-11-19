@@ -9,12 +9,26 @@ const loaded = ref(false);
 const query = ref("");
 const busy = ref<string | null>(null);
 
+const tunnelUp = computed(() => isActive(app.status));
+
+// Режим вкладки: у поднятого туннеля — режим его профиля, иначе — режим
+// профиля, выбранного для подключения.
+const selectedOnly = computed(() => {
+  if (tunnelUp.value) return app.status?.selected_only ?? false;
+  return app.profiles.find((profile) => profile.name === app.selected)?.selected_apps_only ?? false;
+});
+const mode = computed(() => (selectedOnly.value ? "tunnel" : "direct"));
+const where = computed(() => (selectedOnly.value ? "через туннель" : "мимо туннеля"));
+
+const hasLauncher = (item: AppEntry) => (selectedOnly.value ? item.tunnel_launcher : item.launcher);
+
 async function load() {
   try {
-    // Программы с ярлыком — наверху. Порядок фиксируется при загрузке, чтобы
-    // строка не уезжала из-под курсора при переключении «В меню».
     const list = await invoke<AppEntry[]>("list_apps");
-    apps.value = [...list].sort((a, b) => Number(b.launcher) - Number(a.launcher));
+    // Программы с ярлыками — наверху. Порядок фиксируется при загрузке, чтобы
+    // строка не уезжала из-под курсора при переключении «В меню».
+    const rank = (item: AppEntry) => Number(item.launcher || item.tunnel_launcher);
+    apps.value = [...list].sort((a, b) => rank(b) - rank(a));
   } catch (error) {
     fail(error);
   }
@@ -24,8 +38,9 @@ async function load() {
 onMounted(load);
 
 const unavailable = computed(() => app.status?.direct_unavailable ?? null);
-const tunnelUp = computed(() => isActive(app.status));
-const running = computed(() => app.status?.direct_processes ?? 0);
+const running = computed(() =>
+  selectedOnly.value ? (app.status?.tunnel_processes ?? 0) : (app.status?.direct_processes ?? 0),
+);
 
 const shown = computed(() => {
   const needle = query.value.trim().toLowerCase();
@@ -39,8 +54,8 @@ async function launch(item: AppEntry) {
   busy.value = item.id;
   app.error = "";
   try {
-    await invoke("launch_direct", { id: item.id });
-    notify(`${item.name}: запущено мимо туннеля`);
+    await invoke("launch_direct", { id: item.id, mode: mode.value });
+    notify(`${item.name}: запущено ${where.value}`);
   } catch (error) {
     fail(error);
   } finally {
@@ -49,12 +64,15 @@ async function launch(item: AppEntry) {
 }
 
 async function toggleLauncher(item: AppEntry) {
-  const enabled = !item.launcher;
+  const enabled = !hasLauncher(item);
   app.error = "";
   try {
-    await invoke("set_direct_launcher", { id: item.id, enabled });
-    item.launcher = enabled;
-    notify(enabled ? `Ярлык «${item.name} (мимо туннеля)» добавлен в меню` : "Ярлык убран из меню");
+    await invoke("set_direct_launcher", { id: item.id, enabled, mode: mode.value });
+    if (selectedOnly.value) item.tunnel_launcher = enabled;
+    else item.launcher = enabled;
+    notify(
+      enabled ? `Ярлык «${item.name} (${where.value})» добавлен в меню` : "Ярлык убран из меню",
+    );
   } catch (error) {
     fail(error);
   }
@@ -65,8 +83,13 @@ async function toggleLauncher(item: AppEntry) {
   <main class="view">
     <div class="stack">
       <header class="intro">
-        <h1 class="title">Программы мимо туннеля</h1>
-        <p class="quiet small">
+        <h1 class="title">Программы {{ where }}</h1>
+        <p v-if="selectedOnly" class="quiet small">
+          В профиле включено «через туннель только выбранные программы». В туннель идут только
+          программы, запущенные отсюда, и всё, что они откроют сами. Остальное — напрямую.
+          Если программа уже открыта, сначала закрой её.
+        </p>
+        <p v-else class="quiet small">
           Запущенная отсюда программа и всё, что она откроет сама, ходят в интернет напрямую,
           а остальной трафик — через туннель. Если программа уже открыта, сначала закрой её:
           иначе новое окно достанется старому процессу.
@@ -78,11 +101,15 @@ async function toggleLauncher(item: AppEntry) {
         <span class="small selectable">{{ unavailable }}</span>
       </div>
       <p v-else-if="!tunnelUp" class="quiet small">
-        Туннель сейчас отключён — программы и так ходят напрямую.
+        <template v-if="selectedOnly">
+          Туннель сейчас отключён. Запущенные отсюда программы пойдут через туннель, когда он
+          поднимется.
+        </template>
+        <template v-else>Туннель сейчас отключён — программы и так ходят напрямую.</template>
       </p>
       <p v-if="!unavailable" class="small">
-        <template v-if="running > 0">Сейчас мимо туннеля процессов: {{ running }}</template>
-        <span v-else class="quiet">Сейчас мимо туннеля ничего не запущено</span>
+        <template v-if="running > 0">Сейчас {{ where }} процессов: {{ running }}</template>
+        <span v-else class="quiet">Сейчас {{ where }} ничего не запущено</span>
       </p>
 
       <input
@@ -108,10 +135,10 @@ async function toggleLauncher(item: AppEntry) {
             <span>{{ item.name }}</span>
             <span class="quiet small selectable">{{ item.id }}</span>
           </div>
-          <label class="check small menu" :title="'Ярлык «' + item.name + ' (мимо туннеля)» в меню'">
+          <label class="check small menu" :title="`Ярлык «${item.name} (${where})» в меню`">
             <input
               type="checkbox"
-              :checked="item.launcher"
+              :checked="hasLauncher(item)"
               :disabled="!!unavailable"
               @change="toggleLauncher(item)"
             />

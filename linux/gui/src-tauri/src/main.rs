@@ -206,13 +206,13 @@ fn list_apps() -> Vec<apps::AppEntry> {
 }
 
 #[tauri::command(async)]
-fn launch_direct(id: String) -> Result<(), String> {
-    apps::launch(&id)
+fn launch_direct(id: String, mode: Option<apps::Mode>) -> Result<(), String> {
+    apps::launch(&id, mode.unwrap_or(apps::Mode::Direct))
 }
 
 #[tauri::command(async)]
-fn set_direct_launcher(id: String, enabled: bool) -> Result<(), String> {
-    apps::set_launcher(&id, enabled)
+fn set_direct_launcher(id: String, enabled: bool, mode: Option<apps::Mode>) -> Result<(), String> {
+    apps::set_launcher(&id, enabled, mode.unwrap_or(apps::Mode::Direct))
 }
 
 #[tauri::command(async)]

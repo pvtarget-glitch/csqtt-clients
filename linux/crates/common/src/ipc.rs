@@ -18,6 +18,8 @@ pub enum Request {
     /// Перенести процесс, отправивший запрос, в группу «мимо туннеля».
     /// PID берётся из SO_PEERCRED: перенести можно только себя.
     Direct,
+    /// То же для группы «через туннель» (профили «только выбранные программы»).
+    Tunnel,
     /// Последние строки журнала ядра.
     Logs {
         #[serde(default)]
@@ -143,6 +145,12 @@ pub struct Status {
     /// Сколько процессов сейчас идёт мимо туннеля (`csqtt direct`).
     #[serde(default)]
     pub direct_processes: u32,
+    /// Сколько процессов идёт через туннель (`csqtt tunnel`).
+    #[serde(default)]
+    pub tunnel_processes: u32,
+    /// Профиль сессии: через туннель только выбранные программы.
+    #[serde(default)]
+    pub selected_only: bool,
     /// Почему приложения мимо туннеля недоступны (None — доступны).
     #[serde(default)]
     pub direct_unavailable: Option<String>,

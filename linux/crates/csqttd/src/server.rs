@@ -129,14 +129,22 @@ async fn handle_connection(shared: Arc<Shared>, stream: UnixStream) {
                         }
                         alive
                     }
-                    Ok(Request::Direct) => {
+                    Ok(request @ (Request::Direct | Request::Tunnel)) => {
+                        let keeper = if matches!(request, Request::Direct) {
+                            &shared.direct
+                        } else {
+                            &shared.tunneled
+                        };
                         let response = match peer_pid {
                             Some(pid) => match crate::bypass::BypassParams::from_config(&shared.config)
-                                .add_process(pid as u32)
+                                .add_process(pid as u32, keeper.group())
                             {
                                 Ok(()) => {
-                                    shared.direct.register(pid as u32);
-                                    shared.log(format!("процесс {pid} (uid {uid}) идёт мимо туннеля"));
+                                    keeper.register(pid as u32);
+                                    shared.log(format!(
+                                        "процесс {pid} (uid {uid}) идёт {}",
+                                        keeper.group().describe()
+                                    ));
                                     Response::Ok
                                 }
                                 Err(error) => Response::Error { message: format!("{error:#}") },
@@ -215,7 +223,7 @@ async fn handle_request(shared: &Arc<Shared>, request: Request) -> Response {
             };
             session::send_control(shared, Control::Captcha { id, result }).await
         }
-        Request::Subscribe { .. } | Request::Direct => Ok(()),
+        Request::Subscribe { .. } | Request::Direct | Request::Tunnel => Ok(()),
     };
     match result {
         Ok(()) => Response::Ok,

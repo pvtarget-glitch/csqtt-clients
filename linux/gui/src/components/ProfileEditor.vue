@@ -35,6 +35,7 @@ function blank(): Profile {
       ips: [],
     },
     persistent: false,
+    selected_apps_only: false,
   };
 }
 
@@ -246,6 +247,13 @@ async function copyLink() {
             </select>
           </label>
         </div>
+        <label class="check">
+          <input v-model="draft.selected_apps_only" type="checkbox" />
+          <span>
+            Через туннель только выбранные программы. Остальное, включая DNS системы, идёт
+            напрямую; программы для туннеля запускаются на вкладке «Программы».
+          </span>
+        </label>
         <label class="check">
           <input v-model="draft.persistent" type="checkbox" />
           <span>

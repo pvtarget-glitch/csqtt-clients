@@ -221,6 +221,15 @@ const needsHashes = computed(
             <dt>На связи</dt>
             <dd>{{ uptime }}</dd>
           </div>
+          <div v-if="status?.selected_only" class="facts__wide">
+            <dt>Через туннель</dt>
+            <dd>
+              только выбранные программы
+              <button class="link small" type="button" @click="app.view = 'apps'">
+                (сейчас процессов: {{ status.tunnel_processes }})
+              </button>
+            </dd>
+          </div>
         </dl>
 
         <div v-if="status?.captcha" class="note note--wait">
@@ -367,6 +376,10 @@ const needsHashes = computed(
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 14px 20px;
+}
+
+.facts__wide {
+  grid-column: 1 / -1;
 }
 
 .facts dt {

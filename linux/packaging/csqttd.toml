@@ -39,3 +39,5 @@
 # cgroup v2 для них, путь от корня cgroup. Нужен пакет nftables.
 #cgroup_root = "/sys/fs/cgroup"
 #bypass_cgroup = "csqtt-direct"
+# Программы через туннель в профилях «только выбранные программы» (`csqtt tunnel`).
+#tunnel_cgroup = "csqtt-tunnel"

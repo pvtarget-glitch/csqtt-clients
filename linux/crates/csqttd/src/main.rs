@@ -201,12 +201,22 @@ async fn keep_direct_processes(shared: std::sync::Arc<state::Shared>) {
         interval.tick().await;
         let keeper_params = params.clone();
         let shared_for_tick = shared.clone();
-        let moved =
-            tokio::task::spawn_blocking(move || shared_for_tick.direct.tick(&keeper_params))
-                .await
-                .unwrap_or_default();
-        for pid in moved {
-            shared.log(format!("процесс {pid} вернулся в группу «мимо туннеля»"));
+        let moved = tokio::task::spawn_blocking(move || {
+            let mut moved = Vec::new();
+            for keeper in [&shared_for_tick.direct, &shared_for_tick.tunneled] {
+                for pid in keeper.tick(&keeper_params) {
+                    moved.push((pid, keeper.group()));
+                }
+            }
+            moved
+        })
+        .await
+        .unwrap_or_default();
+        for (pid, group) in moved {
+            shared.log(format!(
+                "процесс {pid} вернулся в группу «{}»",
+                group.describe()
+            ));
         }
     }
 }

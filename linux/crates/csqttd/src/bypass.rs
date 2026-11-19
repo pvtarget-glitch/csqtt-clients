@@ -1,4 +1,4 @@
-//! Приложения мимо туннеля.
+//! Программы мимо туннеля и «через туннель только выбранные программы».
 //!
 //! Процесс, запущенный через `csqtt direct -- …`, демон переносит в отдельную
 //! cgroup v2. Пока туннель поднят, nftables метят пакеты сокетов этой cgroup,
@@ -15,6 +15,12 @@
 //!
 //! Дочерние процессы наследуют cgroup, поэтому мимо туннеля идёт и всё, что
 //! приложение запустит само.
+//!
+//! Обратный режим профиля (`selected_apps_only`): в туннель идут только
+//! процессы cgroup `csqtt-tunnel` (`csqtt tunnel -- …`). Их пакеты получают
+//! метку T+1, правило `fwmark T+1 lookup T` заменяет общее «всё в туннель»,
+//! а masquerade на csqtt0 меняет адрес физического интерфейса на адрес
+//! туннеля.
 
 use anyhow::{anyhow, bail, Context, Result};
 use std::{
@@ -25,12 +31,32 @@ use std::{
 
 pub const NFT_TABLE: &str = "csqtt";
 
+/// Группа процессов.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Group {
+    /// `csqtt direct`: мимо туннеля.
+    Direct,
+    /// `csqtt tunnel`: через туннель (для профилей «только выбранные»).
+    Tunnel,
+}
+
+impl Group {
+    pub fn describe(self) -> &'static str {
+        match self {
+            Group::Direct => "мимо туннеля",
+            Group::Tunnel => "через туннель",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BypassParams {
     /// Корень cgroup v2 (обычно /sys/fs/cgroup).
     pub cgroup_root: PathBuf,
-    /// Путь cgroup относительно корня, например `csqtt-direct`.
+    /// cgroup «мимо туннеля» относительно корня, например `csqtt-direct`.
     pub cgroup: String,
+    /// cgroup «через туннель», например `csqtt-tunnel`.
+    pub tunnel_cgroup: String,
 }
 
 impl BypassParams {
@@ -38,15 +64,23 @@ impl BypassParams {
         Self {
             cgroup_root: config.cgroup_root.clone(),
             cgroup: config.bypass_cgroup.clone(),
+            tunnel_cgroup: config.tunnel_cgroup.clone(),
         }
     }
 
-    pub fn dir(&self) -> PathBuf {
-        self.cgroup_root.join(&self.cgroup)
+    fn name(&self, group: Group) -> &str {
+        match group {
+            Group::Direct => &self.cgroup,
+            Group::Tunnel => &self.tunnel_cgroup,
+        }
     }
 
-    fn level(&self) -> usize {
-        self.cgroup
+    pub fn dir(&self, group: Group) -> PathBuf {
+        self.cgroup_root.join(self.name(group))
+    }
+
+    fn level(&self, group: Group) -> usize {
+        self.name(group)
             .split('/')
             .filter(|part| !part.is_empty())
             .count()
@@ -66,8 +100,8 @@ impl BypassParams {
         None
     }
 
-    pub fn ensure_cgroup(&self) -> Result<()> {
-        let dir = self.dir();
+    pub fn ensure_cgroup(&self, group: Group) -> Result<()> {
+        let dir = self.dir(group);
         if !dir.is_dir() {
             std::fs::create_dir_all(&dir)
                 .with_context(|| format!("создание cgroup {}", dir.display()))?;
@@ -75,58 +109,64 @@ impl BypassParams {
         Ok(())
     }
 
-    /// Переносит процесс (вместе с потоками) в cgroup обхода.
-    pub fn add_process(&self, pid: u32) -> Result<()> {
+    /// Переносит процесс (вместе с потоками) в cgroup группы.
+    pub fn add_process(&self, pid: u32, group: Group) -> Result<()> {
         if let Some(reason) = self.unavailable_reason() {
             bail!("{reason}");
         }
-        self.ensure_cgroup()?;
-        let procs = self.dir().join("cgroup.procs");
+        self.ensure_cgroup(group)?;
+        let procs = self.dir(group).join("cgroup.procs");
         std::fs::write(&procs, pid.to_string())
             .with_context(|| format!("перенос процесса {pid} в {}", procs.display()))
     }
 
-    /// Сколько процессов сейчас идёт мимо туннеля.
-    pub fn process_count(&self) -> u32 {
-        std::fs::read_to_string(self.dir().join("cgroup.procs"))
+    /// Сколько процессов сейчас в группе.
+    pub fn process_count(&self, group: Group) -> u32 {
+        std::fs::read_to_string(self.dir(group).join("cgroup.procs"))
             .map(|text| text.lines().filter(|line| !line.trim().is_empty()).count() as u32)
             .unwrap_or(0)
     }
 
-    pub fn nft_ruleset(&self, interface: &str, mark: u32) -> String {
+    /// Метки: `direct` — мимо туннеля, `tunnel` — через туннель.
+    pub fn nft_ruleset(&self, interface: &str, direct: u32, tunnel: u32) -> String {
         format!(
             "table inet {NFT_TABLE} {{\n\
              \x20 chain bypass_mark {{\n\
              \x20   type route hook output priority mangle; policy accept;\n\
-             \x20   socket cgroupv2 level {level} \"{cgroup}\" meta mark set {mark:#x}\n\
+             \x20   socket cgroupv2 level {direct_level} \"{direct_cgroup}\" meta mark set {direct:#x}\n\
+             \x20   socket cgroupv2 level {tunnel_level} \"{tunnel_cgroup}\" meta mark set {tunnel:#x}\n\
              \x20 }}\n\
              \x20 chain bypass_nat {{\n\
              \x20   type nat hook postrouting priority srcnat; policy accept;\n\
-             \x20   meta mark {mark:#x} oifname != \"{interface}\" masquerade\n\
+             \x20   meta mark {direct:#x} oifname != \"{interface}\" masquerade\n\
+             \x20   meta mark {tunnel:#x} oifname \"{interface}\" masquerade\n\
              \x20 }}\n\
              }}\n",
-            level = self.level(),
-            cgroup = self.cgroup,
+            direct_level = self.level(Group::Direct),
+            direct_cgroup = self.cgroup,
+            tunnel_level = self.level(Group::Tunnel),
+            tunnel_cgroup = self.tunnel_cgroup,
         )
     }
 
-    pub fn install(&self, interface: &str, mark: u32) -> Result<()> {
+    pub fn install(&self, interface: &str, direct: u32, tunnel: u32) -> Result<()> {
         if let Some(reason) = self.unavailable_reason() {
             bail!("{reason}");
         }
-        self.ensure_cgroup()?;
+        self.ensure_cgroup(Group::Direct)?;
+        self.ensure_cgroup(Group::Tunnel)?;
         remove_table();
-        nft_stdin(&self.nft_ruleset(interface, mark))
+        nft_stdin(&self.nft_ruleset(interface, direct, tunnel))
     }
 }
 
-/// Процессы, запущенные через `csqtt direct`, и их потомки.
+/// Процессы, запущенные через `csqtt direct` / `csqtt tunnel`, и их потомки.
 ///
 /// Flatpak, Snap и запуск через systemd переносят процесс в собственную
 /// systemd scope — тогда он выпал бы из группы. Раз в секунду демон находит
 /// потомков зарегистрированных процессов по /proc и возвращает их в группу.
-#[derive(Default)]
 pub struct Keeper {
+    group: Group,
     roots: std::sync::Mutex<Vec<Root>>,
 }
 
@@ -138,6 +178,17 @@ struct Root {
 }
 
 impl Keeper {
+    pub fn new(group: Group) -> Self {
+        Self {
+            group,
+            roots: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn group(&self) -> Group {
+        self.group
+    }
+
     pub fn register(&self, pid: u32) {
         if let Some((_, start)) = read_stat(pid) {
             let mut roots = self.lock();
@@ -155,7 +206,7 @@ impl Keeper {
     /// Возвращает в группу ушедших из неё потомков. Возвращает их PID.
     pub fn tick(&self, params: &BypassParams) -> Vec<u32> {
         let members: std::collections::HashSet<u32> =
-            std::fs::read_to_string(params.dir().join("cgroup.procs"))
+            std::fs::read_to_string(params.dir(self.group).join("cgroup.procs"))
                 .unwrap_or_default()
                 .lines()
                 .filter_map(|line| line.trim().parse().ok())
@@ -177,7 +228,7 @@ impl Keeper {
         let strays = strays(&parents, &seeds, &members);
         let mut moved = Vec::new();
         for pid in strays {
-            if params.add_process(pid).is_ok() {
+            if params.add_process(pid, self.group).is_ok() {
                 moved.push(pid);
             }
         }
@@ -315,16 +366,19 @@ mod tests {
         BypassParams {
             cgroup_root: "/sys/fs/cgroup".into(),
             cgroup: cgroup.into(),
+            tunnel_cgroup: "csqtt-tunnel".into(),
         }
     }
 
     #[test]
     fn ruleset_matches_cgroup_level_and_mark() {
-        let rules = params("system.slice/csqtt-direct").nft_ruleset("csqtt0", 51880);
+        let rules = params("system.slice/csqtt-direct").nft_ruleset("csqtt0", 51880, 51881);
         assert!(rules.contains(
             "socket cgroupv2 level 2 \"system.slice/csqtt-direct\" meta mark set 0xcaa8"
         ));
+        assert!(rules.contains("socket cgroupv2 level 1 \"csqtt-tunnel\" meta mark set 0xcaa9"));
         assert!(rules.contains("meta mark 0xcaa8 oifname != \"csqtt0\" masquerade"));
+        assert!(rules.contains("meta mark 0xcaa9 oifname \"csqtt0\" masquerade"));
         assert!(rules.starts_with("table inet csqtt {"));
     }
 
