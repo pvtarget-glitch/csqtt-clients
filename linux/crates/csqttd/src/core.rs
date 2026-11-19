@@ -773,7 +773,9 @@ mod tests {
         std::thread::sleep(Duration::from_millis(300));
 
         use std::io::Write;
-        child.stdin.take().unwrap().write_all(b"STOP\n").unwrap();
+        // Без настоящего TUN ядро к этому моменту уже вышло, и запись в его
+        // stdin может вернуть EPIPE — это ожидаемо.
+        let _ = child.stdin.take().unwrap().write_all(b"STOP\n");
         let status = child.wait().unwrap();
         let mut log = String::new();
         std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut log).unwrap();
@@ -783,7 +785,11 @@ mod tests {
             "первое событие: {first:?}\nжурнал:\n{log}"
         );
         handoff.unwrap_or_else(|error| panic!("fd не принят: {error:#}\nжурнал:\n{log}"));
-        assert!(log.contains("Получена команда STOP"), "журнал:\n{log}");
+        if real_tun {
+            assert!(log.contains("Получена команда STOP"), "журнал:\n{log}");
+        } else {
+            assert!(log.contains("TUN FD успешно получен"), "журнал:\n{log}");
+        }
         let expected = if real_tun { 0 } else { EXIT_TUN_LOST };
         assert_eq!(status.code(), Some(expected), "журнал:\n{log}");
         if std::env::var_os("CSQTT_SHOW_CORE_LOG").is_some() {
