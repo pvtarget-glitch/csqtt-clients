@@ -82,6 +82,17 @@ impl State {
     }
 }
 
+/// Один рабочий поток ядра: через какой узел VK он идёт и с какого времени.
+/// Ядро сообщает об этом начиная с 2.5.0-linux.1; старое ядро — пустой список.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StreamInfo {
+    pub worker: u32,
+    /// Адрес TURN-сервера VK.
+    pub server: String,
+    /// Unix-время в миллисекундах, с которого поток работает.
+    pub since: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CaptchaRequest {
     pub id: u64,
@@ -126,6 +137,9 @@ pub struct Status {
     /// Подсказка службы о вероятной причине, пока туннель не поднялся.
     #[serde(default)]
     pub diagnosis: Option<String>,
+    /// Потоки по узлам VK (если ядро их сообщает).
+    #[serde(default)]
+    pub streams: Vec<StreamInfo>,
     /// Хеши, которые VK больше не принимает (звонок завершён).
     #[serde(default)]
     pub dead_hashes: Vec<String>,

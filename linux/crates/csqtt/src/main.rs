@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use csqtt_common::{
     captcha,
     client::{self, Client},
-    ipc::{CaptchaRequest, Event, LogLine, Request, State, Status},
+    ipc::{CaptchaRequest, Event, LogLine, Request, State, Status, StreamInfo},
     link::{format_link, parse_link, strip_vk_url},
     store::{self, Store},
 };
@@ -68,6 +68,9 @@ enum Command {
     Status {
         #[arg(long)]
         json: bool,
+        /// Показать каждый поток: узел VK и время работы
+        #[arg(long)]
+        streams: bool,
     },
     /// Журнал ядра
     Logs {
@@ -142,7 +145,7 @@ fn run(command: Command) -> Result<()> {
             println!("Туннель отключён");
             Ok(())
         }
-        Command::Status { json } => status(json),
+        Command::Status { json, streams } => status(json, streams),
         Command::Logs { lines, follow } => logs(lines, follow),
         Command::Agent => agent(),
     }
@@ -311,6 +314,24 @@ fn print_status(status: &Status) {
         } else {
             println!("Потоки:       {} активных", status.active_workers);
         }
+        let servers = stream_servers(&status.streams);
+        if !servers.is_empty() {
+            let shown: Vec<String> = servers
+                .iter()
+                .take(4)
+                .map(|(host, count)| format!("{host} ×{count}"))
+                .collect();
+            let rest = servers.len().saturating_sub(4);
+            println!(
+                "Узлы VK:      {}{}",
+                shown.join(", "),
+                if rest > 0 {
+                    format!(" и ещё {rest}")
+                } else {
+                    String::new()
+                }
+            );
+        }
         println!(
             "Трафик:       ↑ {}  ↓ {}",
             format_bytes(status.bytes_up),
@@ -350,15 +371,53 @@ fn print_status(status: &Status) {
     }
 }
 
-fn status(json: bool) -> Result<()> {
+fn status(json: bool, streams: bool) -> Result<()> {
     let mut client = Client::connect(&client::socket_path())?;
     let status = client.status()?;
     if json {
         println!("{}", serde_json::to_string_pretty(&status)?);
     } else {
         print_status(&status);
+        if streams {
+            print_streams(&status.streams);
+        }
     }
     Ok(())
+}
+
+/// Узлы VK с числом потоков на каждом, по убыванию.
+fn stream_servers(streams: &[StreamInfo]) -> Vec<(String, usize)> {
+    let mut servers: Vec<(String, usize)> = Vec::new();
+    for stream in streams {
+        let host = stream
+            .server
+            .rsplit_once(':')
+            .map_or(stream.server.as_str(), |(host, _)| host)
+            .to_owned();
+        match servers.iter_mut().find(|(known, _)| *known == host) {
+            Some((_, count)) => *count += 1,
+            None => servers.push((host, 1)),
+        }
+    }
+    servers.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    servers
+}
+
+fn print_streams(streams: &[StreamInfo]) {
+    if streams.is_empty() {
+        println!("\nПотоки по узлам VK: ядро о них не сообщает или потоков нет");
+        return;
+    }
+    let now = unix_now() * 1000;
+    println!("\n  Поток  Узел VK                  В работе");
+    for stream in streams {
+        println!(
+            "  #{:<5} {:<24} {}",
+            stream.worker,
+            stream.server,
+            format_duration(now.saturating_sub(stream.since) / 1000)
+        );
+    }
 }
 
 fn print_log(entry: &LogLine) {
@@ -592,6 +651,29 @@ mod tests {
         assert_eq!(format_bytes(1536), "1.5 КБ");
         assert_eq!(format_bytes(5 * 1024 * 1024), "5.0 МБ");
         assert_eq!(format_duration(3725), "01:02:05");
+    }
+
+    #[test]
+    fn groups_streams_by_vk_node() {
+        let stream = |worker, server: &str| StreamInfo {
+            worker,
+            server: server.into(),
+            since: 0,
+        };
+        let servers = stream_servers(&[
+            stream(1, "95.142.0.2:443"),
+            stream(2, "155.212.0.1:3478"),
+            stream(3, "155.212.0.1:19302"),
+            stream(4, "[2a00::1]:3478"),
+        ]);
+        assert_eq!(
+            servers,
+            vec![
+                ("155.212.0.1".to_owned(), 2),
+                ("95.142.0.2".to_owned(), 1),
+                ("[2a00::1]".to_owned(), 1),
+            ]
+        );
     }
 
     #[test]

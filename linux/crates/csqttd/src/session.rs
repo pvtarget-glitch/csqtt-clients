@@ -8,7 +8,7 @@ use crate::{
     watch::Watcher,
 };
 use csqtt_common::{
-    ipc::{CaptchaRequest, Event, State},
+    ipc::{CaptchaRequest, Event, State, StreamInfo},
     profile::{ListMode, Profile, WORKERS_PER_GROUP},
     tunconf::{parse_server_routing, parse_tunconf, ServerRouting, TunConf},
 };
@@ -283,6 +283,7 @@ impl Session {
                 status.state = State::Reconnecting;
                 status.restarts += 1;
                 status.active_workers = 0;
+                status.streams.clear();
             });
             let stop_requested = tokio::select! {
                 _ = tokio::time::sleep(delay) => false,
@@ -579,10 +580,51 @@ impl Session {
                     status.bytes_down = bytes_down;
                 });
             }
+            CoreEvent::StreamUp { worker, server } => {
+                let since = crate::state::now_millis();
+                self.shared.update_status(|status| {
+                    status.streams.retain(|stream| stream.worker != worker);
+                    status.streams.push(StreamInfo {
+                        worker,
+                        server,
+                        since,
+                    });
+                    status.streams.sort_by_key(|stream| stream.worker);
+                });
+            }
+            CoreEvent::StreamDown { worker } => {
+                self.shared.update_status(|status| {
+                    status.streams.retain(|stream| stream.worker != worker)
+                });
+            }
+            CoreEvent::Streams { streams } => {
+                let now = crate::state::now_millis();
+                self.shared.update_status(|status| {
+                    // Начало потока, известное с STREAM_UP, точнее пересчёта.
+                    let known = std::mem::take(&mut status.streams);
+                    status.streams = streams
+                        .into_iter()
+                        .map(|(worker, server, seconds)| {
+                            let since = known
+                                .iter()
+                                .find(|old| old.worker == worker && old.server == server)
+                                .map(|old| old.since)
+                                .unwrap_or_else(|| now.saturating_sub(seconds * 1000));
+                            StreamInfo {
+                                worker,
+                                server,
+                                since,
+                            }
+                        })
+                        .collect();
+                });
+            }
             CoreEvent::ActiveZero => {
                 run.active = 0;
-                self.shared
-                    .update_status(|status| status.active_workers = 0);
+                self.shared.update_status(|status| {
+                    status.active_workers = 0;
+                    status.streams.clear();
+                });
                 let threshold = self.profile.normalized_workers().min(WORKERS_PER_GROUP);
                 if run.peak >= threshold && run.zero_check_at.is_none() {
                     run.zero_check_at = Some(Instant::now() + ZERO_WORKERS_CONFIRMATION);

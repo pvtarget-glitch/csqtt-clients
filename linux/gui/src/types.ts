@@ -31,6 +31,7 @@ export interface Status {
   restarts: number;
   last_error: string | null;
   diagnosis: string | null;
+  streams: StreamInfo[];
   dead_hashes: string[];
   captcha: CaptchaRequest | null;
   captcha_handlers: number;
@@ -91,4 +92,11 @@ export interface AppInfo {
   profiles_path: string;
   socket_path: string;
   graphical_session: boolean;
+}
+
+/** Рабочий поток ядра: узел VK и начало работы (мс Unix). */
+export interface StreamInfo {
+  worker: number;
+  server: string;
+  since: number;
 }

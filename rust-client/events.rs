@@ -91,6 +91,24 @@ impl Events {
         });
     }
 
+    pub fn stream_up(&self, worker: usize, server: &str) {
+        self.emit(
+            "STREAM_UP",
+            || serde_json::json!({"worker": worker, "server": server}),
+        );
+    }
+
+    pub fn stream_down(&self, worker: usize, seconds: u64) {
+        self.emit(
+            "STREAM_DOWN",
+            || serde_json::json!({"worker": worker, "seconds": seconds}),
+        );
+    }
+
+    pub fn streams(&self, streams: &[crate::stats::StreamSnapshot]) {
+        self.emit("STREAMS", || serde_json::json!({"streams": streams}));
+    }
+
     pub fn active_zero(&self) {
         self.emit("ACTIVE_ZERO", || serde_json::json!({}));
     }

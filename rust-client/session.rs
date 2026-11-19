@@ -802,6 +802,8 @@ fn authenticate_inbound(
 struct ActiveConnection {
     stats: Arc<Stats>,
     events: Events,
+    worker: usize,
+    incarnation: u64,
 }
 
 struct WorkerRegistration {
@@ -827,14 +829,30 @@ impl Drop for WorkerRegistration {
 }
 
 impl ActiveConnection {
-    fn new(stats: Arc<Stats>, events: Events) -> Self {
+    fn new(
+        stats: Arc<Stats>,
+        events: Events,
+        worker: usize,
+        incarnation: u64,
+        server: std::net::SocketAddr,
+    ) -> Self {
         stats.active_connections.fetch_add(1, Ordering::Relaxed);
-        Self { stats, events }
+        stats.stream_up(worker, incarnation, server);
+        events.stream_up(worker, &server.to_string());
+        Self {
+            stats,
+            events,
+            worker,
+            incarnation,
+        }
     }
 }
 
 impl Drop for ActiveConnection {
     fn drop(&mut self) {
+        if let Some(seconds) = self.stats.stream_down(self.worker, self.incarnation) {
+            self.events.stream_down(self.worker, seconds);
+        }
         if self.stats.active_connections.fetch_sub(1, Ordering::AcqRel) == 1 {
             self.events.active_zero();
         }
@@ -1149,7 +1167,13 @@ async fn run_allocated_session(
     crate::log_error!("[ВОРКЕР #{}] [READY] Поток готов ✓", config.id);
     runtime.events.ready(config.id);
     config.repair.mark_ready(config.id);
-    let _active = ActiveConnection::new(runtime.stats.clone(), runtime.events.clone());
+    let _active = ActiveConnection::new(
+        runtime.stats.clone(),
+        runtime.events.clone(),
+        config.id,
+        incarnation_id,
+        allocation.server_addr(),
+    );
     let mut writer = tokio::spawn(writer_loop(
         writer_transport,
         WriterRuntime {

@@ -443,6 +443,11 @@ impl TurnAllocation {
         Ok(allocation)
     }
 
+    /// Адрес TURN-сервера VK, через который идёт этот поток.
+    pub fn server_addr(&self) -> SocketAddr {
+        self.core.server_address()
+    }
+
     pub fn local_addr(&self) -> SocketAddr {
         *self
             .relay_address

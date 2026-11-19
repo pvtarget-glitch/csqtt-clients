@@ -81,6 +81,7 @@ pub fn idle_status() -> Status {
         dns: Vec::new(),
         interface: None,
         active_workers: 0,
+        streams: Vec::new(),
         workers_target: 0,
         bytes_up: 0,
         bytes_down: 0,

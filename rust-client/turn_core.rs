@@ -603,6 +603,10 @@ impl NativeCore {
         });
     }
 
+    pub(crate) fn server_address(&self) -> SocketAddr {
+        self.lock().server
+    }
+
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner
             .lock()

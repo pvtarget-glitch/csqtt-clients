@@ -283,6 +283,17 @@ pub enum CoreEvent {
         bytes_up: u64,
         bytes_down: u64,
     },
+    StreamUp {
+        worker: u32,
+        server: String,
+    },
+    StreamDown {
+        worker: u32,
+    },
+    /// Полный список потоков: (номер, узел VK, секунд в работе).
+    Streams {
+        streams: Vec<(u32, String, u64)>,
+    },
     ActiveZero,
     TunLost,
     Dtls {
@@ -368,6 +379,31 @@ pub fn parse_stdout_line(line: &str) -> Option<CoreEvent> {
             active: number("active") as u32,
             bytes_up: number("bytes_up"),
             bytes_down: number("bytes_down"),
+        },
+        "STREAM_UP" => CoreEvent::StreamUp {
+            worker: number("worker") as u32,
+            server: text("server"),
+        },
+        "STREAM_DOWN" => CoreEvent::StreamDown {
+            worker: number("worker") as u32,
+        },
+        "STREAMS" => CoreEvent::Streams {
+            streams: payload
+                .get("streams")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| {
+                            Some((
+                                item.get("worker")?.as_u64()? as u32,
+                                item.get("server")?.as_str()?.to_owned(),
+                                item.get("seconds").and_then(Value::as_u64).unwrap_or(0),
+                            ))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         },
         "ACTIVE_ZERO" => CoreEvent::ActiveZero,
         "TUN_LOST" => CoreEvent::TunLost,
@@ -459,6 +495,29 @@ fn try_send_tun_fd(address: &UnixAddr, tun: &OwnedFd) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_stream_events() {
+        assert_eq!(
+            parse_stdout_line(r#"__CSQTT_EVENT__|STREAM_UP|{"worker":7,"server":"1.2.3.4:3478"}"#),
+            Some(CoreEvent::StreamUp {
+                worker: 7,
+                server: "1.2.3.4:3478".into()
+            })
+        );
+        assert_eq!(
+            parse_stdout_line(r#"__CSQTT_EVENT__|STREAM_DOWN|{"worker":7,"seconds":12}"#),
+            Some(CoreEvent::StreamDown { worker: 7 })
+        );
+        assert_eq!(
+            parse_stdout_line(
+                r#"__CSQTT_EVENT__|STREAMS|{"streams":[{"worker":1,"server":"a:1","seconds":5},{"bad":1}]}"#
+            ),
+            Some(CoreEvent::Streams {
+                streams: vec![(1, "a:1".into(), 5)]
+            })
+        );
+    }
     use csqtt_common::link::CsqttLink;
 
     fn profile() -> Profile {

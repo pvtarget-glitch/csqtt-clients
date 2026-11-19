@@ -67,6 +67,12 @@ impl FdReceiver {
                         match accept(self.listener.get_ref().as_raw_fd()) {
                             Ok(descriptor) => {
                                 let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
+                                if let Err(error) = check_peer(descriptor.as_fd()) {
+                                    crate::log_error!(
+                                        "[ОШИБКА] TUN FD отклонён: {error}"
+                                    );
+                                    continue;
+                                }
                                 if let Err(error) = configure_nonblocking(descriptor.as_fd()) {
                                     crate::log_error!(
                                         "[ОШИБКА] Не удалось перевести TUN FD (UDS accept) в nonblocking: {error}"
@@ -171,6 +177,47 @@ impl FdReceiver {
     }
 }
 
+/// UID, от которых ядро принимает TUN FD: свой и root. Абстрактный сокет
+/// виден любому процессу в сетевом пространстве имён, и без этой проверки
+/// посторонний процесс мог бы подсунуть свой дескриптор и получить трафик.
+/// `CSQTT_TUN_PEER_UID` добавляет ещё один разрешённый UID.
+#[cfg(unix)]
+fn allowed_peer(uid: u32, own: u32, extra: Option<u32>) -> bool {
+    uid == own || uid == 0 || extra == Some(uid)
+}
+
+#[cfg(unix)]
+fn extra_peer_uid() -> Option<u32> {
+    std::env::var("CSQTT_TUN_PEER_UID")
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn check_peer(descriptor: std::os::fd::BorrowedFd<'_>) -> Result<()> {
+    use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
+    let credentials = getsockopt(&descriptor, PeerCredentials)?;
+    let own = nix::unistd::geteuid().as_raw();
+    if !allowed_peer(credentials.uid(), own, extra_peer_uid()) {
+        bail!(
+            "отправитель pid {} uid {} не имеет права передавать TUN",
+            credentials.pid(),
+            credentials.uid()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+fn check_peer(descriptor: std::os::fd::BorrowedFd<'_>) -> Result<()> {
+    let (uid, _) = nix::unistd::getpeereid(descriptor)?;
+    let own = nix::unistd::geteuid().as_raw();
+    if !allowed_peer(uid.as_raw(), own, extra_peer_uid()) {
+        bail!("отправитель uid {uid} не имеет права передавать TUN");
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 fn configure_nonblocking(descriptor: std::os::fd::BorrowedFd<'_>) -> Result<()> {
     use std::os::fd::AsRawFd;
@@ -250,6 +297,15 @@ mod tests {
             unsafe { libc::recv(socket.as_raw_fd(), ack.as_mut_ptr().cast(), ack.len(), 0) };
         assert_eq!(received, 1);
         ack[0]
+    }
+
+    #[test]
+    fn peer_policy_allows_self_root_and_configured_uid() {
+        use super::allowed_peer;
+        assert!(allowed_peer(1000, 1000, None));
+        assert!(allowed_peer(0, 1000, None));
+        assert!(!allowed_peer(1001, 1000, None));
+        assert!(allowed_peer(1001, 1000, Some(1001)));
     }
 
     #[tokio::test]

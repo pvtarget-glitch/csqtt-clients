@@ -83,6 +83,29 @@ const uptime = computed(() => {
   return formatDuration(Math.max(0, Math.floor(now.value / 1000) - since));
 });
 
+interface NodeRow {
+  host: string;
+  streams: number;
+  oldest: number;
+}
+
+// Потоки по узлам VK: какой узел держит больше потоков и как давно.
+const nodes = computed<NodeRow[]>(() => {
+  const rows = new Map<string, NodeRow>();
+  for (const stream of status.value?.streams ?? []) {
+    const host = stream.server.replace(/:\d+$/, "");
+    const row = rows.get(host) ?? { host, streams: 0, oldest: stream.since };
+    row.streams += 1;
+    row.oldest = Math.min(row.oldest, stream.since);
+    rows.set(host, row);
+  }
+  return [...rows.values()].sort((a, b) => b.streams - a.streams || a.host.localeCompare(b.host));
+});
+
+function nodeAge(since: number): string {
+  return formatDuration(Math.max(0, Math.floor((now.value - since) / 1000)));
+}
+
 const link = ref("");
 const importing = ref(false);
 
@@ -158,6 +181,27 @@ const needsHashes = computed(
             </template>
             <template v-else>Потоков по настройке сервера: {{ total }}</template>
           </p>
+          <details v-if="active && nodes.length" class="nodes">
+            <summary class="small">
+              Узлы VK: {{ nodes.length }}
+            </summary>
+            <table class="small">
+              <thead>
+                <tr>
+                  <th scope="col">Узел</th>
+                  <th scope="col">Потоков</th>
+                  <th scope="col">Дольше всех</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="node in nodes" :key="node.host">
+                  <td class="selectable mono">{{ node.host }}</td>
+                  <td>{{ node.streams }}</td>
+                  <td>{{ nodeAge(node.oldest) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </details>
         </section>
 
         <dl v-if="state === 'connected' || state === 'reconnecting'" class="facts">
@@ -279,6 +323,44 @@ const needsHashes = computed(
   flex-direction: column;
   gap: 10px;
   padding: 4px 0 2px;
+}
+
+.nodes summary {
+  cursor: pointer;
+  color: var(--muted);
+  width: fit-content;
+}
+
+.nodes summary:focus-visible {
+  outline: 2px solid var(--line);
+  outline-offset: 2px;
+}
+
+.nodes table {
+  margin-top: 8px;
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.nodes th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--muted);
+  padding: 0 0 4px;
+}
+
+.nodes .mono {
+  font-family: var(--mono);
+}
+
+.nodes td {
+  padding: 3px 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.nodes th:not(:first-child),
+.nodes td:not(:first-child) {
+  text-align: right;
 }
 
 .facts {

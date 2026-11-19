@@ -147,6 +147,7 @@ def main():
 
     started = time.time()
     ticks = 0
+    streams_sent = False
     while True:
         time.sleep(0.5)
         ticks += 1
@@ -154,6 +155,19 @@ def main():
         if SCENARIO == "wide" and received:
             active = min(28, 10 + ticks * 3)
         event("STATS", {"active": active, "bytes_up": 150000 * ticks, "bytes_down": 2400000 * ticks})
+        if SCENARIO == "ok" and received and not streams_sent:
+            # Новое ядро сообщает потоки: два узла VK, один поток падает.
+            streams_sent = True
+            for worker in range(1, 5):
+                server = "155.212.0.1:3478" if worker <= 3 else "95.142.0.2:443"
+                event("STREAM_UP", {"worker": worker, "server": server})
+            event("STREAM_DOWN", {"worker": 2, "seconds": 1})
+            event("STREAMS", {"streams": [
+                {"worker": 1, "server": "155.212.0.1:3478", "seconds": 0},
+                {"worker": 3, "server": "155.212.0.1:3478", "seconds": 0},
+                {"worker": 4, "server": "95.142.0.2:443", "seconds": 0},
+                {"worker": 5, "server": "95.142.0.2:443", "seconds": 120},
+            ]})
         if SCENARIO == "restart" and GENERATION == 1 and received and time.time() - started > 1.5:
             log("simulated TUN loss exit")
             sys.exit(3)
