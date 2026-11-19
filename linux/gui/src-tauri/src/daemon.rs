@@ -78,7 +78,7 @@ fn subscription(app: &AppHandle) -> Result<(), String> {
                 previous = Some(status.state);
                 update_tray(app, Some(status));
             }
-            Event::Captcha { request } => solve_captcha(request.clone()),
+            Event::Captcha { request } => solve_captcha(app.clone(), request.clone()),
             Event::Log { .. } | Event::CaptchaClosed { .. } => {}
         }
         let _ = app.emit("daemon-event", &event);
@@ -105,11 +105,20 @@ fn announce_transition(previous: Option<State>, status: &Status) {
     }
 }
 
-/// Окно проверки VK — отдельный процесс; результат уходит демону.
-fn solve_captcha(request: CaptchaRequest) {
+/// Окно проверки VK — встроенное в приложение (macOS, Windows,
+/// CSQTT_CAPTCHA_WEBVIEW=1) или помощник WebKitGTK (Linux); результат уходит
+/// демону.
+fn solve_captcha(app: AppHandle, request: CaptchaRequest) {
     std::thread::spawn(move || {
         notify("VK просит проверку", "Пройди её в открывшемся окне");
-        let (token, error) = match captcha::solve(&request) {
+        let builtin =
+            !cfg!(target_os = "linux") || std::env::var_os("CSQTT_CAPTCHA_WEBVIEW").is_some();
+        let solved = if builtin {
+            crate::captcha_window::solve(&app, &request)
+        } else {
+            captcha::solve(&request)
+        };
+        let (token, error) = match solved {
             Ok(token) => (Some(token), None),
             Err(reason) => (None, Some(reason)),
         };

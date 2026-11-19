@@ -30,6 +30,7 @@ const PLANNED_RESTART_MIN_INTERVAL: Duration = Duration::from_secs(30);
 const STABLE_UPTIME: Duration = Duration::from_secs(30);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const STARTUP_FAILURES_LIMIT: u32 = 3;
+#[cfg(target_os = "linux")]
 const TUN_HANDOFF_ATTEMPTS: u32 = 60;
 const MAX_CAPTCHA_TOKEN: usize = 8192;
 /// Как часто проверять сон и смену сети.
@@ -80,7 +81,8 @@ struct Session {
 
 /// Одно «включение» ядра.
 struct Run {
-    uds_name: String,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    tun: core::CoreTun,
     stdin: Option<ChildStdin>,
     started: Instant,
     connected: bool,
@@ -322,14 +324,17 @@ impl Session {
     async fn run_core(&mut self, generation: u64, control: &mut mpsc::Receiver<Control>) -> Exit {
         let shared = self.shared.clone();
         let salt = random_hex(16);
-        let uds_name = format!("csqtt_tun_{}", random_hex(8));
+        let tun = match self.core_tun() {
+            Ok(tun) => tun,
+            Err(error) => return Exit::Fatal(error),
+        };
         let launch = CoreLaunch {
             config: &shared.config,
             identity: shared.identity,
             profile: &self.profile,
             generation,
             salt: &salt,
-            uds_name: &uds_name,
+            tun: &tun,
             work_dir: &self.work_dir,
         };
         let mut child = match core::spawn(&launch) {
@@ -359,7 +364,7 @@ impl Session {
         });
 
         let mut run = Run {
-            uds_name,
+            tun,
             stdin: child.stdin.take(),
             started: Instant::now(),
             connected: false,
@@ -709,7 +714,7 @@ impl Session {
         if conf.routing.is_some() || self.server_routing.is_some() {
             self.apply_server_routing(run, conf.routing.clone()).await;
         }
-        let interface = self.shared.config.interface.clone();
+        let interface = self.tunnel_interface();
         let first = !run.connected;
         run.connected = true;
         if self.diagnosis.is_some() {
@@ -762,15 +767,64 @@ impl Session {
         })
     }
 
+    /// Linux: имя UDS для передачи TUN, интерфейс создаётся по CONFIG.
+    #[cfg(target_os = "linux")]
+    fn core_tun(&mut self) -> Result<core::CoreTun, String> {
+        Ok(core::CoreTun::Uds(format!("csqtt_tun_{}", random_hex(8))))
+    }
+
+    /// macOS: utun и пересылка нужны до запуска ядра — ему передаются порты.
+    #[cfg(target_os = "macos")]
+    fn core_tun(&mut self) -> Result<core::CoreTun, String> {
+        let shared = self.shared.clone();
+        if self.network.is_none() {
+            let mut params = NetParams::from_config(&shared.config, shared.identity.uid);
+            params.selected_only = self.profile.selected_apps_only;
+            let network = tokio::task::block_in_place(|| Network::create(params))
+                .map_err(|error| format!("не удалось создать utun: {error:#}"))?;
+            self.network = Some(network);
+        }
+        let link = self
+            .network
+            .as_ref()
+            .expect("сеть создана выше")
+            .link()
+            .clone();
+        Ok(core::CoreTun::Relay {
+            core_port: link.core_port,
+            relay_port: link.relay_port,
+            uplink: link.uplink,
+        })
+    }
+
+    #[cfg(target_os = "linux")]
     fn hand_off_tun(&mut self, run: &Run) -> Result<(), String> {
         let Some(network) = self.network.as_ref() else {
             return Ok(());
         };
+        let core::CoreTun::Uds(name) = &run.tun else {
+            return Ok(());
+        };
         tokio::task::block_in_place(|| {
             let descriptor = network.tun_fd().map_err(|error| format!("{error:#}"))?;
-            core::send_tun_fd(&run.uds_name, &descriptor, TUN_HANDOFF_ATTEMPTS)
+            core::send_tun_fd(name, &descriptor, TUN_HANDOFF_ATTEMPTS)
                 .map_err(|error| format!("{error:#}"))
         })
+    }
+
+    /// macOS: пакеты идут через пересылку, передавать нечего.
+    #[cfg(not(target_os = "linux"))]
+    fn hand_off_tun(&mut self, _run: &Run) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Имя интерфейса туннеля для статуса.
+    fn tunnel_interface(&self) -> String {
+        #[cfg(target_os = "macos")]
+        if let Some(network) = self.network.as_ref() {
+            return network.interface_name().to_owned();
+        }
+        self.shared.config.interface.clone()
     }
 
     /// Сети, которые обходят туннель на уровне маршрутов (режим blacklist).

@@ -3,9 +3,17 @@
 //! Держит TUN-интерфейс, маршруты и DNS, запускает ядро csqtt от имени
 //! отдельного пользователя и принимает команды по UNIX-сокету.
 
+#[cfg(target_os = "linux")]
+mod bypass;
+#[cfg(not(target_os = "linux"))]
+#[path = "bypass_stub.rs"]
 mod bypass;
 mod config;
 mod core;
+#[cfg(target_os = "linux")]
+mod net;
+#[cfg(target_os = "macos")]
+#[path = "net_macos.rs"]
 mod net;
 mod server;
 mod session;

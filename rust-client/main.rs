@@ -120,6 +120,10 @@ struct Arguments {
     salt: String,
     #[arg(long, default_value = "")]
     tun_uds: String,
+    /// Принимать пакеты на --listen только с этого адреса (служба csqtt-linux
+    /// на macOS/Windows).
+    #[arg(long = "listen-peer", default_value = "")]
+    listen_peer: String,
     /// Привязать исходящие сокеты ядра к интерфейсу (имя; на Windows — индекс).
     #[arg(long = "bind-interface", default_value = "")]
     bind_interface: String,
@@ -223,6 +227,13 @@ fn runtime_worker_threads_with_limit(
 
 async fn run(arguments: Arguments) -> Result<i32> {
     netbind::configure(&arguments.bind_interface)?;
+    if !arguments.listen_peer.is_empty() {
+        let peer = arguments
+            .listen_peer
+            .parse()
+            .with_context(|| format!("--listen-peer: {}", arguments.listen_peer))?;
+        dispatcher::Dispatcher::restrict_listen_peer(peer);
+    }
     if arguments.validate_vk_hashes {
         run_vk_hash_validation(&arguments).await?;
         return Ok(EXIT_NORMAL);
@@ -584,6 +595,7 @@ fn normalize_cli_argument(argument: String) -> String {
         "salt",
         "tun-uds",
         "bind-interface",
+        "listen-peer",
         "validate-vk-hashes",
         "domain-routing",
         "exclude-ru-zones",

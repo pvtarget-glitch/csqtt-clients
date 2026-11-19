@@ -5,7 +5,9 @@ use crate::{
     state::{Control, Shared},
 };
 use csqtt_common::ipc::{Event, Request, Response};
-use std::{ffi::CString, sync::Arc};
+#[cfg(not(target_os = "macos"))]
+use std::ffi::CString;
+use std::sync::Arc;
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::{unix::OwnedWriteHalf, UnixListener, UnixStream},
@@ -48,10 +50,24 @@ fn authorized(shared: &Shared, uid: u32) -> bool {
     if user.gid == group.gid || group.mem.contains(&user.name) {
         return true;
     }
-    CString::new(user.name)
+    member_by_directory(&user.name, user.gid, &group)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn member_by_directory(name: &str, gid: nix::unistd::Gid, group: &nix::unistd::Group) -> bool {
+    CString::new(name)
         .ok()
-        .and_then(|name| nix::unistd::getgrouplist(&name, user.gid).ok())
+        .and_then(|name| nix::unistd::getgrouplist(&name, gid).ok())
         .is_some_and(|groups| groups.contains(&group.gid))
+}
+
+/// macOS: членство (в том числе вложенное) знает Open Directory.
+#[cfg(target_os = "macos")]
+fn member_by_directory(name: &str, _gid: nix::unistd::Gid, group: &nix::unistd::Group) -> bool {
+    std::process::Command::new("/usr/sbin/dsmemberutil")
+        .args(["checkmembership", "-U", name, "-G", &group.name])
+        .output()
+        .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains("is a member"))
 }
 
 async fn send(writer: &mut OwnedWriteHalf, response: &Response) -> bool {

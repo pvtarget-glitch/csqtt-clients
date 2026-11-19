@@ -1,0 +1,57 @@
+name: macOS
+
+# Сборка и проверка версии для macOS: ядро, служба, CLI, тест с имитатором
+# ядра (utun, пересылка, маршруты, DNS). Пакет .pkg собирается в release.yml.
+on:
+  workflow_dispatch:
+  push:
+    branches: [macos]
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            linux -> target
+            rust-client -> ../linux/target/core
+      - name: Ядро
+        working-directory: rust-client
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/linux/target/core
+        run: cargo build --release --locked --ignore-rust-version
+      - name: Служба и CLI
+        run: cargo build --locked -p csqttd -p csqtt
+      - name: Модульные тесты
+        run: cargo test --locked -p csqtt-common -p csqttd -p csqtt
+      - name: Служба с имитатором ядра
+        run: sudo tests/macos-test.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: linux/gui/package-lock.json
+      - name: Установщик .pkg
+        run: scripts/build-macos-pkg.sh
+      - name: Установщик для Intel (кросс-сборка)
+        run: CSQTT_MAC_TARGET=x86_64-apple-darwin scripts/build-macos-pkg.sh
+      - name: Установка .pkg и проверка службы
+        run: |
+          sudo installer -pkg dist/csqtt-macos-*-arm64.pkg -target /
+          sleep 3
+          ls -la /usr/local/sbin/csqttd /usr/local/bin/csqtt /Applications/csqtt.app
+          sudo launchctl print system/io.github.csqtt.daemon | head -20
+          for i in $(seq 1 20); do [ -S /var/run/csqtt/csqttd.sock ] && break; sleep 0.5; done
+          csqtt status
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-pkg
+          path: linux/dist/*.pkg

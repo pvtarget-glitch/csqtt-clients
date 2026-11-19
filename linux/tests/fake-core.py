@@ -3,7 +3,8 @@
 
 Говорит с хостом тем же протоколом, что и настоящий rust-client:
 события в stdout, журнал в stderr, команды из stdin, TUN-fd через
-абстрактный UNIX-сокет. Сценарий выбирается «паролем» (CSQTT_PASSWORD):
+абстрактный UNIX-сокет (Linux) или пакеты по UDP от службы (macOS:
+--listen и --listen-peer). Сценарий выбирается «паролем» (CSQTT_PASSWORD):
 ok, captcha, fatal, crash, restart, routing, tunlost, wide (сервер назначает
 40 потоков, часть из них не поднимается).
 """
@@ -78,6 +79,41 @@ def fd_listener(name):
             event("TUN_LOST")
 
 
+def udp_relay(port, peer):
+    """macOS: служба пересылает пакеты utun в UDP-порт ядра (--listen)."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("127.0.0.1", port))
+    host, peer_port = peer.rsplit(":", 1)
+    expected = (host, int(peer_port))
+    log("UDP relay on %d, peer %s" % (port, peer))
+    while True:
+        packet, source = sock.recvfrom(65535)
+        if source != expected:
+            log("UDP from stranger %s:%d dropped" % source)
+            continue
+        if not received:
+            received.append(-1)
+            log("relay first packet")
+        if packet and packet[0] >> 4 == 4:
+            log("UDP packet %d bytes dst=%s src=%s" % (len(packet), socket.inet_ntoa(packet[16:20]), socket.inet_ntoa(packet[12:16])))
+            if packet[9] == 1 and packet[20] == 8:
+                # ICMP echo request → ответ, чтобы проверить обратный путь.
+                reply = bytearray(packet)
+                reply[12:16], reply[16:20] = packet[16:20], packet[12:16]
+                reply[20] = 0
+                reply[22:24] = b"\0\0"
+                checksum = 0
+                icmp = bytes(reply[20:])
+                if len(icmp) % 2:
+                    icmp += b"\0"
+                for i in range(0, len(icmp), 2):
+                    checksum += (icmp[i] << 8) + icmp[i + 1]
+                checksum = (checksum >> 16) + (checksum & 0xFFFF)
+                checksum = ~(checksum + (checksum >> 16)) & 0xFFFF
+                reply[22:24] = checksum.to_bytes(2, "big")
+                sock.sendto(bytes(reply), expected)
+
+
 def stdin_loop():
     for line in sys.stdin:
         line = line.strip()
@@ -106,7 +142,11 @@ def main():
     log("uid=%d gen=%d scenario=%s" % (os.getuid(), GENERATION, SCENARIO))
     log("argv: %s" % " ".join(sys.argv[1:]))
     log("env keys: %s" % ",".join(sorted(os.environ)))
-    threading.Thread(target=fd_listener, args=(ARGS["tun-uds"],), daemon=True).start()
+    if "tun-uds" in ARGS:
+        threading.Thread(target=fd_listener, args=(ARGS["tun-uds"],), daemon=True).start()
+    else:
+        port = int(ARGS["listen"].rsplit(":", 1)[1])
+        threading.Thread(target=udp_relay, args=(port, ARGS["listen-peer"]), daemon=True).start()
     threading.Thread(target=stdin_loop, daemon=True).start()
     time.sleep(0.3)
 

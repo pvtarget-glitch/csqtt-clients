@@ -81,6 +81,7 @@ fn check_uplink(previous: &mut Option<Uplink>, current: Option<Uplink>) -> Optio
     reason
 }
 
+#[cfg(target_os = "linux")]
 fn clock_offset() -> Option<Duration> {
     let read = |clock: libc::clockid_t| {
         let mut time = libc::timespec {
@@ -94,6 +95,50 @@ fn clock_offset() -> Option<Duration> {
     read(libc::CLOCK_BOOTTIME)?.checked_sub(read(libc::CLOCK_MONOTONIC)?)
 }
 
+/// macOS: монотонные часы идут и во сне, UPTIME — нет.
+#[cfg(target_os = "macos")]
+fn clock_offset() -> Option<Duration> {
+    let read = |clock: libc::clockid_t| {
+        let mut time = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: clock_gettime пишет только в переданную структуру.
+        (unsafe { libc::clock_gettime(clock, &mut time) } == 0)
+            .then(|| Duration::new(time.tv_sec as u64, time.tv_nsec as u32))
+    };
+    read(libc::CLOCK_MONOTONIC_RAW)?.checked_sub(read(libc::CLOCK_UPTIME_RAW)?)
+}
+
+/// macOS: маршрут по умолчанию из `route -n get default`.
+#[cfg(target_os = "macos")]
+pub fn current_uplink(exclude: &str) -> Option<Uplink> {
+    let output = std::process::Command::new("/sbin/route")
+        .args(["-n", "get", "default"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let field = |name: &str| {
+        text.lines()
+            .find_map(|line| line.trim().strip_prefix(name))
+            .map(|value| value.trim().to_owned())
+    };
+    let interface = field("interface:")?;
+    if interface == exclude || interface.starts_with("utun") {
+        return None;
+    }
+    let gateway = field("gateway:")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(Ipv4Addr::UNSPECIFIED);
+    let address = interface_address(&interface);
+    Some(Uplink {
+        interface,
+        gateway,
+        address,
+    })
+}
+
+#[cfg(target_os = "linux")]
 fn current_uplink(exclude: &str) -> Option<Uplink> {
     let routes = std::fs::read_to_string("/proc/net/route").ok()?;
     let (interface, gateway) = default_route(&routes, exclude)?;
@@ -106,6 +151,7 @@ fn current_uplink(exclude: &str) -> Option<Uplink> {
 }
 
 /// Маршрут по умолчанию основной таблицы с наименьшей метрикой.
+#[cfg(target_os = "linux")]
 fn default_route(routes: &str, exclude: &str) -> Option<(String, Ipv4Addr)> {
     routes
         .lines()
@@ -145,6 +191,7 @@ fn interface_address(interface: &str) -> Option<Ipv4Addr> {
 }
 
 #[cfg(test)]
+#[cfg(target_os = "linux")]
 mod tests {
     use super::*;
 

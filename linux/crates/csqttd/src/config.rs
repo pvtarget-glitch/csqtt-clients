@@ -72,16 +72,33 @@ pub struct DaemonConfig {
     pub tunnel_cgroup: String,
 }
 
+#[cfg(not(target_os = "macos"))]
+mod defaults {
+    pub const CORE_PATH: &str = "/usr/lib/csqtt/csqtt-core";
+    pub const CORE_USER: &str = "csqtt-core";
+    pub const DOMAINS: &str = "/usr/share/csqtt/domains.txt";
+    pub const RUNTIME_DIR: &str = "/run/csqtt";
+}
+
+#[cfg(target_os = "macos")]
+mod defaults {
+    pub const CORE_PATH: &str = "/usr/local/lib/csqtt/csqtt-core";
+    /// Без привилегий; трафик ядра выводится привязкой к интерфейсу.
+    pub const CORE_USER: &str = "nobody";
+    pub const DOMAINS: &str = "/usr/local/share/csqtt/domains.txt";
+    pub const RUNTIME_DIR: &str = "/var/run/csqtt";
+}
+
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
             mode: Mode::Full,
-            core_path: "/usr/lib/csqtt/csqtt-core".into(),
-            core_user: "csqtt-core".into(),
-            domains_template: "/usr/share/csqtt/domains.txt".into(),
+            core_path: defaults::CORE_PATH.into(),
+            core_user: defaults::CORE_USER.into(),
+            domains_template: defaults::DOMAINS.into(),
             socket_path: csqtt_common::SOCKET_PATH.into(),
             control_group: csqtt_common::CONTROL_GROUP.into(),
-            runtime_dir: "/run/csqtt".into(),
+            runtime_dir: defaults::RUNTIME_DIR.into(),
             interface: "csqtt0".into(),
             mtu: 1500,
             table: 51880,

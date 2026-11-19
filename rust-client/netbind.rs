@@ -8,7 +8,9 @@
 //! macOS — `IP_BOUND_IF`, Windows — `IP_UNICAST_IF`, Linux — `SO_BINDTODEVICE`
 //! (нужен CAP_NET_RAW).
 
-use anyhow::{Context, Result, bail};
+#[cfg(unix)]
+use anyhow::bail;
+use anyhow::{Context, Result};
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone)]

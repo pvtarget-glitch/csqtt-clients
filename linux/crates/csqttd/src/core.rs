@@ -18,18 +18,23 @@ use csqtt_common::{
     profile::{ListMode, Profile},
     tunconf::ServerRouting,
 };
+#[cfg(target_os = "linux")]
 use nix::sys::socket::{
     connect, recv, sendmsg, setsockopt, socket, sockopt::ReceiveTimeout, AddressFamily,
     ControlMessage, MsgFlags, SockFlag, SockType, UnixAddr,
 };
+#[cfg(target_os = "linux")]
 use nix::sys::time::TimeVal;
 use serde_json::Value;
+#[cfg(target_os = "linux")]
 use std::{
     io::IoSlice,
     os::fd::{AsRawFd, OwnedFd},
+    time::Duration,
+};
+use std::{
     path::{Path, PathBuf},
     process::Stdio,
-    time::Duration,
 };
 use tokio::process::{Child, Command};
 
@@ -71,9 +76,25 @@ pub struct CoreLaunch<'a> {
     pub profile: &'a Profile,
     pub generation: u64,
     pub salt: &'a str,
-    pub uds_name: &'a str,
+    pub tun: &'a CoreTun,
     /// Каталог ядра в /run: рабочий каталог и файлы со списками доменов.
     pub work_dir: &'a Path,
+}
+
+/// Как ядро получает пакеты туннеля.
+#[derive(Debug, Clone)]
+pub enum CoreTun {
+    /// Linux: служба передаёт дескриптор TUN через абстрактный UDS.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Uds(String),
+    /// macOS: служба пересылает пакеты utun в UDP-режим ядра.
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    Relay {
+        core_port: u16,
+        relay_port: u16,
+        /// Физический интерфейс для привязки сокетов ядра.
+        uplink: Option<String>,
+    },
 }
 
 /// Аргументы ядра. Форма `--ключ=значение` исключает трактовку значения
@@ -84,8 +105,6 @@ pub fn build_arguments(launch: &CoreLaunch<'_>, user_domains: Option<&Path>) -> 
     let mut arguments = vec![
         format!("--peer={}", profile.peer()),
         format!("--workers={}", profile.normalized_workers()),
-        "--listen=127.0.0.1:0".to_owned(),
-        format!("--tun-uds={}", launch.uds_name),
         format!(
             "--vk-hash-mode={}",
             if js_hash_mode { "auto_js" } else { "manual" }
@@ -99,6 +118,23 @@ pub fn build_arguments(launch: &CoreLaunch<'_>, user_domains: Option<&Path>) -> 
         format!("--gen={}", launch.generation),
         format!("--salt={}", launch.salt),
     ];
+    match launch.tun {
+        CoreTun::Uds(name) => {
+            arguments.push("--listen=127.0.0.1:0".to_owned());
+            arguments.push(format!("--tun-uds={name}"));
+        }
+        CoreTun::Relay {
+            core_port,
+            relay_port,
+            uplink,
+        } => {
+            arguments.push(format!("--listen=127.0.0.1:{core_port}"));
+            arguments.push(format!("--listen-peer=127.0.0.1:{relay_port}"));
+            if let Some(uplink) = uplink {
+                arguments.push(format!("--bind-interface={uplink}"));
+            }
+        }
+    }
     if !profile.hashes.is_empty() {
         arguments.push(format!("--vk={}", profile.hashes.join(",")));
     }
@@ -465,6 +501,7 @@ pub fn captcha_url_allowed(url: &str) -> bool {
 
 /// Передаёт ядру TUN-fd. Блокирующая функция: ядро может ещё не успеть
 /// открыть сокет, поэтому соединение повторяется до `attempts` раз.
+#[cfg(target_os = "linux")]
 pub fn send_tun_fd(uds_name: &str, tun: &OwnedFd, attempts: u32) -> Result<()> {
     let address = UnixAddr::new_abstract(uds_name.as_bytes()).context("адрес UDS")?;
     let mut last_error = None;
@@ -481,6 +518,7 @@ pub fn send_tun_fd(uds_name: &str, tun: &OwnedFd, attempts: u32) -> Result<()> {
         .context("ядро не приняло TUN-интерфейс")
 }
 
+#[cfg(target_os = "linux")]
 fn try_send_tun_fd(address: &UnixAddr, tun: &OwnedFd) -> Result<()> {
     let socket = socket(
         AddressFamily::Unix,
@@ -512,6 +550,38 @@ fn try_send_tun_fd(address: &UnixAddr, tun: &OwnedFd) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relay_mode_arguments() {
+        let profile = profile();
+        let config = DaemonConfig::default();
+        let tun = CoreTun::Relay {
+            core_port: 40001,
+            relay_port: 40002,
+            uplink: Some("en0".into()),
+        };
+        let launch = CoreLaunch {
+            config: &config,
+            identity: CoreIdentity { uid: 999, gid: 999 },
+            profile: &profile,
+            generation: 1,
+            salt: "00",
+            tun: &tun,
+            work_dir: Path::new("/tmp"),
+        };
+        let arguments = build_arguments(&launch, None);
+        for expected in [
+            "--listen=127.0.0.1:40001",
+            "--listen-peer=127.0.0.1:40002",
+            "--bind-interface=en0",
+        ] {
+            assert!(
+                arguments.iter().any(|a| a == expected),
+                "{expected}: {arguments:?}"
+            );
+        }
+        assert!(!arguments.iter().any(|a| a.starts_with("--tun-uds")));
+    }
 
     #[test]
     fn parses_stream_events() {
@@ -564,7 +634,7 @@ mod tests {
             profile,
             generation: 3,
             salt: "00ff",
-            uds_name: "csqtt_tun_test",
+            tun: &CoreTun::Uds("csqtt_tun_test".into()),
             work_dir: Path::new("/nonexistent"),
         };
         build_arguments(&launch, Some(Path::new("/run/csqtt/core/user-domains.txt")))
@@ -737,6 +807,7 @@ mod tests {
     /// Проверка на настоящем ядре: наш argv принимается, а TUN-fd доходит
     /// и подтверждается. Запуск:
     /// `CSQTT_CORE_BIN=/путь/к/csqtt-core cargo test -p csqttd -- --ignored`
+    #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "нужен собранный бинарник ядра в CSQTT_CORE_BIN"]
     fn real_core_accepts_arguments_and_tun_fd() {
@@ -762,7 +833,7 @@ mod tests {
             profile: &profile,
             generation: 1,
             salt: "00112233445566778899aabbccddeeff",
-            uds_name: &uds_name,
+            tun: &CoreTun::Uds(uds_name.clone()),
             work_dir: &work_dir,
         };
         let mut child = StdCommand::new(&config.core_path)

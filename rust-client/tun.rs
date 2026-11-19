@@ -2,12 +2,12 @@ use anyhow::{Result, bail};
 use std::fs::File;
 use tokio_util::sync::CancellationToken;
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub struct FdReceiver {
     listener: tokio::io::unix::AsyncFd<std::os::fd::OwnedFd>,
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 impl FdReceiver {
     pub fn bind(name: &str) -> Result<Self> {
         use nix::errno::Errno;
@@ -181,12 +181,12 @@ impl FdReceiver {
 /// виден любому процессу в сетевом пространстве имён, и без этой проверки
 /// посторонний процесс мог бы подсунуть свой дескриптор и получить трафик.
 /// `CSQTT_TUN_PEER_UID` добавляет ещё один разрешённый UID.
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn allowed_peer(uid: u32, own: u32, extra: Option<u32>) -> bool {
     uid == own || uid == 0 || extra == Some(uid)
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn extra_peer_uid() -> Option<u32> {
     std::env::var("CSQTT_TUN_PEER_UID")
         .ok()
@@ -208,17 +208,7 @@ fn check_peer(descriptor: std::os::fd::BorrowedFd<'_>) -> Result<()> {
     Ok(())
 }
 
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
-fn check_peer(descriptor: std::os::fd::BorrowedFd<'_>) -> Result<()> {
-    let (uid, _) = nix::unistd::getpeereid(descriptor)?;
-    let own = nix::unistd::geteuid().as_raw();
-    if !allowed_peer(uid.as_raw(), own, extra_peer_uid()) {
-        bail!("отправитель uid {uid} не имеет права передавать TUN");
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn configure_nonblocking(descriptor: std::os::fd::BorrowedFd<'_>) -> Result<()> {
     use std::os::fd::AsRawFd;
 
@@ -233,21 +223,21 @@ fn configure_nonblocking(descriptor: std::os::fd::BorrowedFd<'_>) -> Result<()> 
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 pub struct FdReceiver;
 
-#[cfg(not(unix))]
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 impl FdReceiver {
     pub fn bind(_name: &str) -> Result<Self> {
-        bail!("TUN FD transport is available only on Android and Unix")
+        bail!("TUN FD transport is available only on Linux and Android")
     }
 
     pub async fn receive(&self, _cancel: &CancellationToken) -> Result<File> {
-        bail!("TUN FD transport is available only on Android and Unix")
+        bail!("TUN FD transport is available only on Linux and Android")
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
 mod tests {
     use super::FdReceiver;
     use nix::sys::socket::{

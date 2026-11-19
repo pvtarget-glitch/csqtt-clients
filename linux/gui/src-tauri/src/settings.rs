@@ -48,6 +48,7 @@ impl GuiSettings {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn autostart_path() -> Result<PathBuf, String> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|dir| !dir.is_empty())
@@ -61,6 +62,38 @@ pub fn autostart_enabled() -> bool {
     autostart_path().is_ok_and(|path| path.is_file())
 }
 
+/// macOS: LaunchAgent пользователя.
+#[cfg(target_os = "macos")]
+fn autostart_path() -> Result<PathBuf, String> {
+    let home = std::env::var_os("HOME").ok_or("не задан HOME")?;
+    Ok(PathBuf::from(home).join("Library/LaunchAgents/io.github.csqtt.gui.plist"))
+}
+
+#[cfg(target_os = "macos")]
+fn autostart_entry(exe: &str, minimized: bool) -> String {
+    let minimized = if minimized {
+        "\n        <string>--minimized</string>"
+    } else {
+        ""
+    };
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+<plist version=\"1.0\">\n<dict>\n    <key>Label</key>\n    <string>io.github.csqtt.gui</string>\n\
+    <key>ProgramArguments</key>\n    <array>\n        <string>{exe}</string>{minimized}\n    </array>\n\
+    <key>RunAtLoad</key>\n    <true/>\n</dict>\n</plist>\n"
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn autostart_entry(exe: &str, minimized: bool) -> String {
+    let arguments = if minimized { " --minimized" } else { "" };
+    format!(
+        "[Desktop Entry]\nType=Application\nName=csqtt\nComment=Клиент туннеля csqtt\n\
+         Exec=\"{exe}\"{arguments}\nIcon=csqtt\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"
+    )
+}
+
 pub fn set_autostart(enabled: bool, minimized: bool) -> Result<(), String> {
     let path = autostart_path()?;
     if !enabled {
@@ -72,14 +105,10 @@ pub fn set_autostart(enabled: bool, minimized: bool) -> Result<(), String> {
     }
     let exe = std::env::current_exe().map_err(|error| error.to_string())?;
     let exe = exe.to_string_lossy();
-    if exe.contains(['"', '\n', '\\']) {
+    if exe.contains(['"', '\n', '\\', '<', '>', '&']) {
         return Err("путь к программе содержит недопустимые символы".into());
     }
-    let arguments = if minimized { " --minimized" } else { "" };
-    let entry = format!(
-        "[Desktop Entry]\nType=Application\nName=csqtt\nComment=Клиент туннеля csqtt\n\
-         Exec=\"{exe}\"{arguments}\nIcon=csqtt\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"
-    );
+    let entry = autostart_entry(&exe, minimized);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|error| format!("{}: {error}", dir.display()))?;
     }

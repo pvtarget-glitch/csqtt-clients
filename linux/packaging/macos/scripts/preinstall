@@ -1,0 +1,4 @@
+#!/bin/sh
+# Обновление: старая служба останавливается и снимает маршруты.
+launchctl bootout system /Library/LaunchDaemons/io.github.csqtt.daemon.plist 2>/dev/null || true
+exit 0

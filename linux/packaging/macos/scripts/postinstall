@@ -1,0 +1,11 @@
+#!/bin/sh
+# Установщик csqtt для macOS: конфиг службы и запуск через launchd.
+set -e
+mkdir -p /usr/local/etc/csqtt
+[ -f /usr/local/etc/csqtt/csqttd.toml ] || cp /usr/local/share/csqtt/csqttd.toml /usr/local/etc/csqtt/csqttd.toml
+PLIST=/Library/LaunchDaemons/io.github.csqtt.daemon.plist
+chown root:wheel "$PLIST"
+chmod 644 "$PLIST"
+launchctl bootout system "$PLIST" 2>/dev/null || true
+launchctl bootstrap system "$PLIST"
+exit 0

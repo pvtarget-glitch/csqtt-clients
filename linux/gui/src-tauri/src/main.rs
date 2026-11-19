@@ -7,6 +7,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod apps;
+mod captcha_window;
 mod daemon;
 mod server;
 mod settings;
@@ -20,10 +21,7 @@ use csqtt_common::{
 };
 use serde::{Deserialize, Serialize};
 use settings::GuiSettings;
-use std::{
-    ffi::CString,
-    sync::{atomic::AtomicBool, Mutex, MutexGuard},
-};
+use std::sync::{atomic::AtomicBool, Mutex, MutexGuard};
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
@@ -93,7 +91,15 @@ pub fn update_tray(app: &AppHandle, status: Option<&Status>) {
 
 /// Библиотека индикатора загружается динамически, и её отсутствие роняет
 /// процесс внутри зависимости — поэтому проверяем заранее сами.
+/// На macOS и Windows значок в трее есть всегда.
+#[cfg(not(target_os = "linux"))]
 fn indicator_library_present() -> bool {
+    true
+}
+
+#[cfg(target_os = "linux")]
+fn indicator_library_present() -> bool {
+    use std::ffi::CString;
     ["libayatana-appindicator3.so.1", "libappindicator3.so.1"]
         .iter()
         .any(|name| {
@@ -363,7 +369,7 @@ fn app_info() -> AppInfo {
             .map(|path| path.display().to_string())
             .unwrap_or_default(),
         socket_path: socket_path().display().to_string(),
-        graphical_session: csqtt_common::captcha::has_display(),
+        graphical_session: !cfg!(target_os = "linux") || csqtt_common::captcha::has_display(),
     }
 }
 
@@ -409,6 +415,23 @@ fn main() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
+            // Отладочная проверка встроенного окна капчи на странице-заглушке
+            // (tests/captcha_fixture.py): печатает результат и завершает окно.
+            #[cfg(debug_assertions)]
+            if let Ok(url) = std::env::var("CSQTT_CAPTCHA_SELFTEST") {
+                let selftest = handle.clone();
+                std::thread::spawn(move || {
+                    let request = csqtt_common::ipc::CaptchaRequest {
+                        id: 0,
+                        url,
+                        timeout_secs: 20,
+                        mode: "selected".into(),
+                    };
+                    let result = captcha_window::solve(&selftest, &request);
+                    eprintln!("CAPTCHA_SELFTEST {result:?}");
+                    selftest.exit(0);
+                });
+            }
             if indicator_library_present() {
                 match build_tray(&handle) {
                     Ok(tray) => *lock(&app.state::<AppState>().tray) = Some(tray),

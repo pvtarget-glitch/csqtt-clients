@@ -1,0 +1,11 @@
+# Служба csqtt на macOS. Значения по умолчанию подходят большинству.
+# После правки: sudo launchctl kickstart -k system/io.github.csqtt.daemon
+
+# Управлять туннелем могут администраторы этого Mac.
+#control_group = "admin"
+
+# DNS туннеля на время подключения: "auto" (через scutil) или "none".
+#dns = "auto"
+
+# IPv6 туннель не передаёт: "block" — блокировать на время работы, "leak" — нет.
+#ipv6 = "block"

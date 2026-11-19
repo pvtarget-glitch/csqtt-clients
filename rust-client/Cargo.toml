@@ -1,6 +1,6 @@
 [package]
 name = "csqtt-client"
-version = "2.5.0+linux.2"
+version = "2.5.0+linux.3"
 edition = "2024"
 rust-version = "1.97.1"
 license = "Unlicense"
@@ -48,7 +48,7 @@ webpki-roots = "=1.0.9"
 getrandom = "0.4"
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
 
-[target.'cfg(unix)'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
 nix = { version = "0.31.3", features = ["socket", "uio", "user"] }
 
 [dev-dependencies]

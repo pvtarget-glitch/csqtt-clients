@@ -27,6 +27,8 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+static LISTEN_PEER: std::sync::OnceLock<SocketAddr> = std::sync::OnceLock::new();
+
 #[cfg(unix)]
 const TUN_RX_BURST: usize = 32;
 #[cfg(unix)]
@@ -1130,6 +1132,13 @@ impl Dispatcher {
         }
     }
 
+    /// Принимать пакеты на `--listen` только от этого адреса (csqtt-linux:
+    /// служба на macOS/Windows пересылает в ядро пакеты своего TUN по UDP
+    /// и не должна делить этот порт с другими локальными процессами).
+    pub fn restrict_listen_peer(peer: SocketAddr) {
+        let _ = LISTEN_PEER.set(peer);
+    }
+
     async fn read_udp(
         self: Arc<Self>,
         socket: Arc<UdpSocket>,
@@ -1163,6 +1172,9 @@ impl Dispatcher {
                 match socket.try_recv_from(packet.read_area()) {
                     Ok((length, address)) => {
                         burst += 1;
+                        if LISTEN_PEER.get().is_some_and(|peer| *peer != address) {
+                            continue;
+                        }
                         if packet.set_read_len(length).is_err() {
                             continue;
                         }

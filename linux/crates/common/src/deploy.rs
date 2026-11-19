@@ -27,7 +27,10 @@ pub const ASKPASS_SECRET_ENV: &str = "CSQTT_ASKPASS_SECRET";
 pub const ASKPASS_PASSPHRASE_ENV: &str = "CSQTT_ASKPASS_PASSPHRASE";
 
 /// Каталог поставки: `deploy.sh` и бинарники сервера `csqtt-linux-<arch>`.
+#[cfg(not(target_os = "macos"))]
 pub const ASSETS_DIR: &str = "/usr/share/csqtt/server";
+#[cfg(target_os = "macos")]
+pub const ASSETS_DIR: &str = "/usr/local/share/csqtt/server";
 
 #[derive(Debug, Clone)]
 pub enum SshAuth {

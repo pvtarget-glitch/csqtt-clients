@@ -12,10 +12,15 @@ on:
         type: boolean
         required: true
         default: false
+      prerelease:
+        description: "Пометить как тестовый выпуск (pre-release)"
+        type: boolean
+        required: false
+        default: false
       version:
         description: "Release version tag (e.g. v0.2.0)"
         required: false
-        default: "v0.7.0"
+        default: "v0.8.0"
 
 permissions:
   contents: write
@@ -140,9 +145,50 @@ jobs:
           name: router-aarch64
           path: linux/dist/csqtt-router-*.tar.gz
 
+  macos:
+    # Установщики .pkg для Apple Silicon и Intel (сборка на Apple Silicon).
+    needs: server
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            linux -> target
+            rust-client -> ../linux/target/core
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: linux/gui/package-lock.json
+      - name: Служба с имитатором ядра
+        run: |
+          cargo build --locked -p csqttd -p csqtt
+          sudo tests/macos-test.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: server
+          path: linux/dist/server
+      - name: Установщик для Apple Silicon
+        run: |
+          chmod 755 dist/server/csqtt-linux-*
+          scripts/build-macos-pkg.sh
+      - name: Установщик для Intel
+        run: CSQTT_MAC_TARGET=x86_64-apple-darwin scripts/build-macos-pkg.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-pkg
+          path: linux/dist/*.pkg
+
   release:
     if: ${{ github.event.inputs.make_release == 'true' }}
-    needs: [deb, router]
+    needs: [deb, router, macos]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -165,6 +211,10 @@ jobs:
         with:
           name: router-aarch64
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-pkg
+          path: dist
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -175,5 +225,6 @@ jobs:
           files: |
             dist/*.deb
             dist/csqtt-router-*.tar.gz
+            dist/*.pkg
           draft: false
-          prerelease: false
+          prerelease: ${{ github.event.inputs.prerelease == 'true' }}
