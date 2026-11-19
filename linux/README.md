@@ -31,10 +31,10 @@ Linux-клиент туннеля [CSQTT](https://github.com/amurcanov/csqtt): �
 Готовый пакет — в разделе [Releases](https://github.com/pvtarget-glitch/csqtt-linux/releases).
 
 ```bash
-sudo apt install ./csqtt-linux_0.3.1+core2.5.0+linux.1_amd64.deb
+sudo apt install ./csqtt-linux_0.3.2+core2.5.0+linux.1_amd64.deb
 ```
 
-Пакет создаёт пользователя `csqtt-core` и группу `csqtt`, добавляет в группу того, кто ставил через `sudo`, и запускает `csqttd`. После установки в меню приложений появляется «csqtt». Готовому пакету нужен glibc 2.39 или новее (Ubuntu 24.04+, Mint 22+, Debian 13+); для более старых систем собери из исходников на них же.
+Пакет создаёт пользователя `csqtt-core` и группу `csqtt`, добавляет в группу того, кто ставил через `sudo`, и запускает `csqttd`. После установки в меню приложений появляется «csqtt». Пакет собирается на Ubuntu 22.04 и ставится на Ubuntu 22.04+, Mint 21+ и Debian 12+. Для систем старше собери из исходников на них же; программам мимо туннеля там может не хватить cgroup v2.
 
 ### Сборка из исходников
 

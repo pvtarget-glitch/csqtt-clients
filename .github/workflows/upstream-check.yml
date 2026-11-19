@@ -1,0 +1,47 @@
+name: Проверка обновлений amurcanov/csqtt
+
+# Раз в день сравнивает форк с оригиналом. Если в amurcanov/csqtt появились
+# коммиты, которых нет в форке, запуск завершается ошибкой со списком
+# изменений: GitHub присылает владельцу письмо о неудачном запуске.
+# (Задачи в форке выключены, поэтому без issues.)
+on:
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Сравнение с оригиналом
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/amurcanov/csqtt.git
+          git fetch --quiet upstream
+          BRANCH="$(git remote show upstream | sed -n 's/.*HEAD branch: //p')"
+          NEW="$(git rev-list --count "HEAD..upstream/$BRANCH")"
+          if [ "$NEW" = "0" ]; then
+            echo "Форк не отстаёт от amurcanov/csqtt ($BRANCH)." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "В [amurcanov/csqtt](https://github.com/amurcanov/csqtt) коммитов, которых нет в форке: **$NEW** (ветка \`$BRANCH\`)."
+            echo
+            git log --format='- %h %s (%ad)' --date=short "HEAD..upstream/$BRANCH" | head -50
+            echo
+            echo "Что затронуто:"
+            echo
+            echo '```'
+            git diff --stat "HEAD...upstream/$BRANCH" | tail -25
+            echo '```'
+            echo
+            echo "Перед «Sync fork» проверь, не конфликтуют ли изменения в \`rust-client\` с доработками ядра этого форка (см. linux/README.md, «Ядро в этом форке»)."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=Обновился amurcanov/csqtt::новых коммитов: $NEW — подробности в Summary запуска"
+          exit 1

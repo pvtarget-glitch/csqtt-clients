@@ -788,7 +788,7 @@ dependencies = [
 
 [[package]]
 name = "csqtt"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -801,7 +801,7 @@ dependencies = [
 
 [[package]]
 name = "csqtt-common"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -816,7 +816,7 @@ dependencies = [
 
 [[package]]
 name = "csqtt-gui"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "csqtt-common",
  "libc",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "csqttd"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
