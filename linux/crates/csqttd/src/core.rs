@@ -44,7 +44,10 @@ pub struct CoreIdentity {
     pub gid: u32,
 }
 
-pub fn resolve_core_user(name: &str) -> Result<CoreIdentity> {
+pub fn resolve_core_user(name: &str, allow_root: bool) -> Result<CoreIdentity> {
+    if name == "root" && allow_root {
+        return Ok(CoreIdentity { uid: 0, gid: 0 });
+    }
     let user = nix::unistd::User::from_name(name)
         .with_context(|| format!("поиск пользователя {name}"))?
         .with_context(|| {

@@ -15,7 +15,7 @@ on:
       version:
         description: "Release version tag (e.g. v0.2.0)"
         required: false
-        default: "v0.6.0"
+        default: "v0.7.0"
 
 permissions:
   contents: write
@@ -31,6 +31,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust-server -> ../linux/target/server"
       - name: Тесты сервера и сборка под VPS
         run: |
           pip install --user --break-system-packages cargo-zigbuild
@@ -58,6 +61,11 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: linux/gui/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            linux -> target
+            rust-client -> ../linux/target/core
       - name: Зависимости сборки
         run: |
           sudo apt-get update
@@ -103,9 +111,38 @@ jobs:
           name: deb-amd64
           path: linux/dist/*.deb
 
+  router:
+    # Роутер Keenetic с Entware (aarch64): служба, CLI и ядро, musl.
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            linux -> target
+            rust-client -> ../linux/target/core-router
+      - name: Тест режима «только интерфейс»
+        run: |
+          sudo apt-get update && sudo apt-get install -y iproute2
+          cargo build -p csqttd -p csqtt
+          sudo tests/interface-mode.sh
+      - name: Сборка под aarch64
+        run: |
+          pip install --user --break-system-packages cargo-zigbuild
+          export PATH="$HOME/.local/bin:$PATH"
+          scripts/build-router.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: router-aarch64
+          path: linux/dist/csqtt-router-*.tar.gz
+
   release:
     if: ${{ github.event.inputs.make_release == 'true' }}
-    needs: deb
+    needs: [deb, router]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -124,6 +161,10 @@ jobs:
         with:
           name: deb-amd64
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: router-aarch64
+          path: dist
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -131,6 +172,8 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: "csqtt-linux ${{ github.event.inputs.version }}"
           body_path: release-notes.md
-          files: dist/*.deb
+          files: |
+            dist/*.deb
+            dist/csqtt-router-*.tar.gz
           draft: false
           prerelease: false

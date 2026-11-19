@@ -312,10 +312,17 @@ pub fn valid_cgroup_name(name: &str) -> bool {
 }
 
 fn find_program(name: &str) -> Option<PathBuf> {
-    ["/usr/sbin", "/sbin", "/usr/bin", "/bin"]
-        .iter()
-        .map(|dir| Path::new(dir).join(name))
-        .find(|path| path.is_file())
+    [
+        "/usr/sbin",
+        "/sbin",
+        "/usr/bin",
+        "/bin",
+        "/opt/sbin",
+        "/opt/bin",
+    ]
+    .iter()
+    .map(|dir| Path::new(dir).join(name))
+    .find(|path| path.is_file())
 }
 
 fn nft_args(arguments: &[&str]) -> Result<()> {

@@ -1,0 +1,19 @@
+# csqttd на роутере Keenetic (Entware + XKeen).
+#
+# Режим «interface»: служба поднимает интерфейс csqtt0 и больше ничего не
+# трогает — ни маршруты, ни DNS. В туннель попадает только то, что Mihomo
+# (proxy с interface-name: csqtt0) или Xray (sockopt.interface) отправят
+# через этот интерфейс. Всем остальным по-прежнему управляет XKeen.
+mode = "interface"
+interface = "csqtt0"
+mtu = 1500
+
+# Отдельного пользователя в Entware обычно нет; в режиме interface ядро
+# может работать от root — его трафик и так не попадает в туннель.
+core_user = "root"
+core_path = "/opt/lib/csqtt/csqtt-core"
+domains_template = "/opt/share/csqtt/domains.txt"
+
+socket_path = "/opt/var/run/csqtt/csqttd.sock"
+runtime_dir = "/opt/var/run/csqtt"
+log_lines = 2000

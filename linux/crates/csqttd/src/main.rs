@@ -116,7 +116,8 @@ fn bind_socket(path: &Path) -> Result<UnixListener> {
 async fn run(options: Options) -> Result<()> {
     let config = DaemonConfig::load(&options.config, options.explicit_config)?;
     config.validate()?;
-    let identity = core::resolve_core_user(&config.core_user)?;
+    let identity =
+        core::resolve_core_user(&config.core_user, config.mode == config::Mode::Interface)?;
     let net_params = net::NetParams::from_config(&config, identity.uid);
 
     if options.cleanup {

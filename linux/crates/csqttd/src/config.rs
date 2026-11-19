@@ -24,9 +24,24 @@ pub enum Ipv6Mode {
     Leak,
 }
 
+/// Что служба настраивает в системе.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Mode {
+    /// Весь трафик системы идёт в туннель: маршруты, DNS, kill switch.
+    #[default]
+    Full,
+    /// Только интерфейс: маршруты и DNS не трогаются, в туннель попадает
+    /// лишь то, что привязано к интерфейсу (Mihomo `interface-name`,
+    /// Xray `sockopt.interface`). Режим для роутера с XKeen.
+    Interface,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DaemonConfig {
+    /// `full` (компьютер) или `interface` (роутер с XKeen).
+    pub mode: Mode,
     /// Бинарник ядра csqtt (rust-client, собранный под Linux).
     pub core_path: PathBuf,
     /// Системный пользователь, от имени которого работает ядро. Его трафик
@@ -60,6 +75,7 @@ pub struct DaemonConfig {
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
+            mode: Mode::Full,
             core_path: "/usr/lib/csqtt/csqtt-core".into(),
             core_user: "csqtt-core".into(),
             domains_template: "/usr/share/csqtt/domains.txt".into(),
@@ -130,7 +146,9 @@ impl DaemonConfig {
         if self.table == u32::MAX {
             bail!("table: слишком большой номер");
         }
-        if self.core_user.is_empty() || self.core_user == "root" {
+        // В режиме interface трафик ядра и так не попадает в туннель, и на
+        // роутере с Entware отдельного пользователя обычно нет.
+        if self.core_user.is_empty() || (self.core_user == "root" && self.mode == Mode::Full) {
             bail!("core_user: нужен отдельный непривилегированный пользователь");
         }
         Ok(())
@@ -154,6 +172,14 @@ mod tests {
         assert_eq!(config.ipv6, Ipv6Mode::Leak);
         assert_eq!(config.dns, DnsMode::None);
         assert_eq!(config.interface, "csqtt0");
+    }
+
+    #[test]
+    fn interface_mode_allows_root_core() {
+        let config: DaemonConfig =
+            toml::from_str("mode = \"interface\"\ncore_user = \"root\"").unwrap();
+        assert_eq!(config.mode, Mode::Interface);
+        config.validate().unwrap();
     }
 
     #[test]

@@ -8,11 +8,20 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Сокет на роутере с Entware: `/run` там нет, всё живёт под `/opt`.
+pub const ENTWARE_SOCKET_PATH: &str = "/opt/var/run/csqtt/csqttd.sock";
+
 pub fn socket_path() -> PathBuf {
-    std::env::var_os("CSQTT_SOCKET")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(crate::SOCKET_PATH))
+    if let Some(path) = std::env::var_os("CSQTT_SOCKET").filter(|path| !path.is_empty()) {
+        return PathBuf::from(path);
+    }
+    let standard = PathBuf::from(crate::SOCKET_PATH);
+    let entware = PathBuf::from(ENTWARE_SOCKET_PATH);
+    if !standard.exists() && entware.exists() {
+        entware
+    } else {
+        standard
+    }
 }
 
 pub struct Client {

@@ -15,7 +15,7 @@
 
 use crate::{
     bypass::{self, BypassParams},
-    config::{DaemonConfig, DnsMode, Ipv6Mode},
+    config::{DaemonConfig, DnsMode, Ipv6Mode, Mode},
 };
 use anyhow::{anyhow, bail, Context, Result};
 use csqtt_common::{profile::parse_ipv4_net, tunconf::TunConf};
@@ -57,6 +57,7 @@ pub struct NetParams {
     pub bypass: BypassParams,
     /// Профиль «через туннель только выбранные программы».
     pub selected_only: bool,
+    pub mode: Mode,
 }
 
 impl NetParams {
@@ -72,6 +73,7 @@ impl NetParams {
             runtime_dir: config.runtime_dir.clone(),
             bypass: BypassParams::from_config(config),
             selected_only: false,
+            mode: config.mode,
         }
     }
 
@@ -162,6 +164,11 @@ impl Network {
             ])?;
             self.address = Some(conf.ip);
         }
+        if self.params.mode == Mode::Interface {
+            // Ни маршрутов, ни правил, ни DNS: трафик в интерфейс направляет
+            // тот, кто привязывает к нему сокеты (Mihomo, Xray).
+            return Ok(notes);
+        }
         ip(&[
             "-4", "route", "replace", "default", "dev", &iface, "table", &table,
         ])?;
@@ -220,6 +227,9 @@ impl Network {
     /// IPv4-сети, которые идут мимо туннеля средствами ядра Linux
     /// (`throw` в таблице туннеля). Аналог `excludeRoute` на Android.
     pub fn set_direct_networks(&mut self, networks: &[String]) -> Result<()> {
+        if self.params.mode == Mode::Interface {
+            return Ok(());
+        }
         let wanted: BTreeSet<(Ipv4Addr, u8)> = networks
             .iter()
             .filter_map(|text| parse_ipv4_net(text))
@@ -515,10 +525,18 @@ fn default_route_interface() -> Option<String> {
 }
 
 fn find_program(name: &str) -> Option<PathBuf> {
-    ["/usr/sbin", "/sbin", "/usr/bin", "/bin"]
-        .iter()
-        .map(|dir| Path::new(dir).join(name))
-        .find(|path| path.is_file())
+    // /opt — Entware на роутерах Keenetic (ip из пакета ip-full).
+    [
+        "/usr/sbin",
+        "/sbin",
+        "/usr/bin",
+        "/bin",
+        "/opt/sbin",
+        "/opt/bin",
+    ]
+    .iter()
+    .map(|dir| Path::new(dir).join(name))
+    .find(|path| path.is_file())
 }
 
 fn run(program: &str, arguments: &[&str]) -> Result<()> {
