@@ -25,7 +25,9 @@ ProtectHome=yes
 PrivateTmp=yes
 ProtectSystem=true
 ProtectKernelModules=yes
-ProtectControlGroups=yes
+# Не ProtectControlGroups: служба переносит процессы `csqtt direct`
+# в свою cgroup (приложения мимо туннеля).
+ProtectControlGroups=no
 RestrictNamespaces=yes
 RestrictRealtime=yes
 LockPersonality=yes

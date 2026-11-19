@@ -13,7 +13,10 @@
 //! Интерфейс существует, пока демон держит fd: если ядро упало, маршруты
 //! остаются и трафик не уходит мимо туннеля до перезапуска ядра.
 
-use crate::config::{DaemonConfig, DnsMode, Ipv6Mode};
+use crate::{
+    bypass::{self, BypassParams},
+    config::{DaemonConfig, DnsMode, Ipv6Mode},
+};
 use anyhow::{anyhow, bail, Context, Result};
 use csqtt_common::{profile::parse_ipv4_net, tunconf::TunConf};
 use std::{
@@ -51,6 +54,7 @@ pub struct NetParams {
     pub ipv6: Ipv6Mode,
     pub core_uid: u32,
     pub runtime_dir: PathBuf,
+    pub bypass: BypassParams,
 }
 
 impl NetParams {
@@ -64,6 +68,7 @@ impl NetParams {
             ipv6: config.ipv6,
             core_uid,
             runtime_dir: config.runtime_dir.clone(),
+            bypass: BypassParams::from_config(config),
         }
     }
 
@@ -151,6 +156,12 @@ impl Network {
         if !self.rules_installed {
             self.relax_rp_filter(&mut notes);
             install_rules(&self.params, "-4")?;
+            match self.install_bypass() {
+                Ok(()) => {}
+                Err(error) => notes.push(format!(
+                    "приложения мимо туннеля (csqtt direct) недоступны: {error:#}"
+                )),
+            }
             if self.params.ipv6 == Ipv6Mode::Block {
                 if let Err(error) = block_ipv6(&self.params) {
                     notes.push(format!(
@@ -216,6 +227,23 @@ impl Network {
             ])?;
         }
         self.direct = wanted;
+        Ok(())
+    }
+
+    /// Метка пакетов приложений мимо туннеля — номер таблицы туннеля.
+    fn install_bypass(&self) -> Result<()> {
+        let mark = self.params.table;
+        self.params.bypass.install(&self.params.interface, mark)?;
+        let priority = self.params.rule_priority.to_string();
+        let mark = mark.to_string();
+        ip(&[
+            "-4", "rule", "add", "priority", &priority, "fwmark", &mark, "lookup", "main",
+        ])?;
+        if Path::new("/proc/sys/net/ipv6").exists() {
+            ip_quiet(&[
+                "-6", "rule", "add", "priority", &priority, "fwmark", &mark, "lookup", "main",
+            ]);
+        }
         Ok(())
     }
 
@@ -294,6 +322,7 @@ impl Network {
             }
         }
         remove_rules_and_routes(&self.params);
+        bypass::remove_table();
         self.rules_installed = false;
         self.direct.clear();
         self.address = None;
@@ -314,6 +343,7 @@ impl Drop for Network {
 /// не в счёт — /run и правила живут только до перезагрузки).
 pub fn cleanup_stale(params: &NetParams) {
     remove_rules_and_routes(params);
+    bypass::remove_table();
     ip_quiet(&["link", "del", "dev", &params.interface]);
     restore_resolv_conf(&params.resolv_backup());
 }

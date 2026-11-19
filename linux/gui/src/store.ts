@@ -5,7 +5,7 @@ import type { DaemonEvent, LogLine, Profile, Status } from "./types";
 
 const MAX_LOG_LINES = 6000;
 
-export type View = "tunnel" | "profiles" | "log" | "settings";
+export type View = "tunnel" | "profiles" | "apps" | "log" | "settings";
 
 export const app = reactive({
   view: "tunnel" as View,

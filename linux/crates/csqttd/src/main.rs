@@ -3,6 +3,7 @@
 //! Держит TUN-интерфейс, маршруты и DNS, запускает ядро csqtt от имени
 //! отдельного пользователя и принимает команды по UNIX-сокету.
 
+mod bypass;
 mod config;
 mod core;
 mod net;
@@ -147,6 +148,7 @@ async fn run(options: Options) -> Result<()> {
     );
 
     let server = tokio::spawn(server::serve(shared.clone(), listener));
+    tokio::spawn(keep_direct_processes(shared.clone()));
     let mut terminate = signal(SignalKind::terminate())?;
     let mut interrupt = signal(SignalKind::interrupt())?;
     tokio::select! {
@@ -184,5 +186,27 @@ fn main() {
     if let Err(error) = runtime.block_on(run(options)) {
         eprintln!("csqttd: {error:#}");
         std::process::exit(1);
+    }
+}
+
+/// Раз в секунду возвращает в группу «мимо туннеля» потомков процессов
+/// `csqtt direct`, которых перенесли в свою scope (Flatpak, Snap).
+async fn keep_direct_processes(shared: std::sync::Arc<state::Shared>) {
+    let params = bypass::BypassParams::from_config(&shared.config);
+    if params.unavailable_reason().is_some() {
+        return;
+    }
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+    loop {
+        interval.tick().await;
+        let keeper_params = params.clone();
+        let shared_for_tick = shared.clone();
+        let moved =
+            tokio::task::spawn_blocking(move || shared_for_tick.direct.tick(&keeper_params))
+                .await
+                .unwrap_or_default();
+        for pid in moved {
+            shared.log(format!("процесс {pid} вернулся в группу «мимо туннеля»"));
+        }
     }
 }

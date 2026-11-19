@@ -48,6 +48,10 @@ pub struct DaemonConfig {
     pub ipv6: Ipv6Mode,
     /// Сколько строк журнала ядра держать в памяти.
     pub log_lines: usize,
+    /// Корень cgroup v2.
+    pub cgroup_root: PathBuf,
+    /// cgroup для приложений мимо туннеля (`csqtt direct`), от корня.
+    pub bypass_cgroup: String,
 }
 
 impl Default for DaemonConfig {
@@ -66,6 +70,8 @@ impl Default for DaemonConfig {
             dns: DnsMode::Auto,
             ipv6: Ipv6Mode::Block,
             log_lines: 2000,
+            cgroup_root: "/sys/fs/cgroup".into(),
+            bypass_cgroup: "csqtt-direct".into(),
         }
     }
 }
@@ -106,6 +112,9 @@ impl DaemonConfig {
         if self.rule_priority == 0 || self.rule_priority > 32000 {
             bail!("rule_priority: ожидается 1..32000");
         }
+        if !crate::bypass::valid_cgroup_name(&self.bypass_cgroup) {
+            bail!("bypass_cgroup: относительный путь из латиницы, цифр, «-», «_», «.»");
+        }
         if self.core_user.is_empty() || self.core_user == "root" {
             bail!("core_user: нужен отдельный непривилегированный пользователь");
         }
@@ -140,6 +149,7 @@ mod tests {
             "core_user = \"root\"",
             "mtu = 100",
             "unknown_key = 1",
+            "bypass_cgroup = \"../escape\"",
         ] {
             let parsed: Result<DaemonConfig, _> = toml::from_str(text);
             assert!(

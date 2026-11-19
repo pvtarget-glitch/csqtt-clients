@@ -63,10 +63,11 @@ async fn send(writer: &mut OwnedWriteHalf, response: &Response) -> bool {
 }
 
 async fn handle_connection(shared: Arc<Shared>, stream: UnixStream) {
-    let uid = stream
-        .peer_cred()
-        .map(|cred| cred.uid())
-        .unwrap_or(u32::MAX);
+    let credentials = stream.peer_cred().ok();
+    let uid = credentials.map(|cred| cred.uid()).unwrap_or(u32::MAX);
+    let peer_pid = credentials
+        .and_then(|cred| cred.pid())
+        .filter(|pid| *pid > 0);
     let (reader, mut writer) = stream.into_split();
     if !authorized(&shared, uid) {
         let message = format!(
@@ -127,6 +128,22 @@ async fn handle_connection(shared: Arc<Shared>, stream: UnixStream) {
                             alive = send(&mut writer, &Response::Event { event: Event::Captcha { request } }).await;
                         }
                         alive
+                    }
+                    Ok(Request::Direct) => {
+                        let response = match peer_pid {
+                            Some(pid) => match crate::bypass::BypassParams::from_config(&shared.config)
+                                .add_process(pid as u32)
+                            {
+                                Ok(()) => {
+                                    shared.direct.register(pid as u32);
+                                    shared.log(format!("процесс {pid} (uid {uid}) идёт мимо туннеля"));
+                                    Response::Ok
+                                }
+                                Err(error) => Response::Error { message: format!("{error:#}") },
+                            },
+                            None => Response::Error { message: "не удалось узнать PID клиента".into() },
+                        };
+                        send(&mut writer, &response).await
                     }
                     Ok(request) => {
                         let response = handle_request(&shared, request).await;
@@ -198,7 +215,7 @@ async fn handle_request(shared: &Arc<Shared>, request: Request) -> Response {
             };
             session::send_control(shared, Control::Captcha { id, result }).await
         }
-        Request::Subscribe { .. } => Ok(()),
+        Request::Subscribe { .. } | Request::Direct => Ok(()),
     };
     match result {
         Ok(()) => Response::Ok,

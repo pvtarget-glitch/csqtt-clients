@@ -15,7 +15,7 @@ on:
       version:
         description: "Release version tag (e.g. v0.2.0)"
         required: false
-        default: "v0.2.2"
+        default: "v0.3.0"
 
 permissions:
   contents: write
@@ -43,7 +43,7 @@ jobs:
         run: cargo test -p csqtt-common -p csqttd -p csqtt
       - name: Интеграционные тесты (сеть в отдельном namespace, имитатор ядра)
         run: |
-          sudo apt-get install -y iproute2 python3-cryptography
+          sudo apt-get install -y iproute2 nftables python3-cryptography
           cargo build -p csqttd -p csqtt
           sudo tests/integration.sh
           python3 tests/link_compat.py target/debug/csqtt

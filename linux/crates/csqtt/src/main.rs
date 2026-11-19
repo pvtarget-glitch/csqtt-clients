@@ -83,6 +83,12 @@ enum Command {
     },
     /// Фоновый помощник графической сессии: окно капчи и уведомления
     Agent,
+    /// Запустить программу мимо туннеля: `csqtt direct -- firefox`
+    Direct {
+        /// Программа и её аргументы
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
 }
 
 fn main() {
@@ -148,6 +154,7 @@ fn run(command: Command) -> Result<()> {
         Command::Status { json, streams } => status(json, streams),
         Command::Logs { lines, follow } => logs(lines, follow),
         Command::Agent => agent(),
+        Command::Direct { command } => direct(&command),
     }
 }
 
@@ -347,6 +354,9 @@ fn print_status(status: &Status) {
     if status.restarts > 0 {
         println!("Перезапусков: {}", status.restarts);
     }
+    if status.direct_processes > 0 {
+        println!("Мимо туннеля: процессов {}", status.direct_processes);
+    }
     if !status.dead_hashes.is_empty() {
         println!(
             "Устаревших хешей: {} (звонки завершены)",
@@ -418,6 +428,19 @@ fn print_streams(streams: &[StreamInfo]) {
             format_duration(now.saturating_sub(stream.since) / 1000)
         );
     }
+}
+
+/// Переносит текущий процесс в группу «мимо туннеля» и заменяет его
+/// программой: дочерние процессы остаются в той же группе.
+fn direct(command: &[String]) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+    let mut client = Client::connect(&client::socket_path())?;
+    client.call(&Request::Direct)?;
+    drop(client);
+    let error = std::process::Command::new(&command[0])
+        .args(&command[1..])
+        .exec();
+    bail!("запуск {}: {error}", command[0])
 }
 
 fn print_log(entry: &LogLine) {

@@ -17,6 +17,8 @@ TABLE=51999
 PRIO=9000
 CORE_USER=csqtt-core
 IT_USER=csqtt-it-user
+DIRECT_CG=csqtt-it-direct
+ESCAPE_CG=csqtt-it-escape
 FAKE=/usr/local/lib/csqtt-it/fake-core
 
 [ "$(id -u)" = 0 ] || { echo "нужен root"; exit 2; }
@@ -54,7 +56,10 @@ core_log() { csqtt logs -n 500; }
 
 start_daemon() {
   # Без функции-обёртки: $! должен быть PID самого демона (ip делает exec).
-  ip netns exec "$NS" "$BIN/csqttd" --config "$WORK/csqttd.toml" >>"$WORK/daemon.log" 2>&1 &
+  # ip netns exec монтирует свежий /sys без cgroup — демону (и nft, который
+  # он запускает) нужна cgroup v2 на обычном месте.
+  ip netns exec "$NS" sh -c 'mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null; exec "$0" --config "$1"' \
+    "$BIN/csqttd" "$WORK/csqttd.toml" >>"$WORK/daemon.log" 2>&1 &
   DAEMON_PID=$!
   local i
   for i in $(seq 1 50); do [ -S "$WORK/run/csqttd.sock" ] && return 0; sleep 0.1; done
@@ -70,6 +75,7 @@ stop_daemon() {
 cleanup() {
   stop_daemon
   pkill -f "$FAKE" 2>/dev/null
+  ns sh -c "mount -t cgroup2 none /sys/fs/cgroup && rmdir /sys/fs/cgroup/$DIRECT_CG /sys/fs/cgroup/$ESCAPE_CG" 2>/dev/null
   ip netns del "$NS" 2>/dev/null
   ip link del itv0 2>/dev/null
   rm -rf "$WORK" /etc/netns/"$NS" /usr/local/lib/csqtt-it
@@ -111,7 +117,33 @@ table = $TABLE
 rule_priority = $PRIO
 dns = "resolvconf"
 domains_template = "/nonexistent"
+bypass_cgroup = "$DIRECT_CG"
 EOF
+
+# UDP-запрос на 198.51.100.88:5353 и эхо-сервер, отвечающий адресом источника.
+cat > "$WORK/udp-ping.py" <<'PY'
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.settimeout(3)
+s.sendto(b"ping", ("198.51.100.88", 5353))
+try:
+    print("reply", s.recvfrom(100)[0].decode())
+except OSError as error:
+    print("no reply", error)
+PY
+cat > "$WORK/udp-echo.py" <<'PY'
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.bind(("198.51.100.88", 5353))
+s.settimeout(8)
+try:
+    data, address = s.recvfrom(100)
+    s.sendto(("src=" + address[0]).encode(), address)
+    print("src=" + address[0], flush=True)
+except OSError:
+    print("nothing", flush=True)
+PY
+chmod 644 "$WORK/udp-ping.py" "$WORK/udp-echo.py"
 
 profile() { # profile имя сценарий [доп. TOML]
   cat >> "$WORK/config/profiles.toml" <<EOF
@@ -202,11 +234,40 @@ contains "посторонний пользователь не управляе�
 ALLOWED="$(ns setpriv --reuid "$IT_USER" --regid "$IT_USER" --init-groups env CSQTT_SOCKET="$WORK/run/csqttd.sock" "$WORK/csqtt-client" status 2>&1)"
 contains "участник группы csqtt управляет туннелем" "подключено" "$ALLOWED"
 
+echo "== приложения мимо туннеля"
+check "функция доступна" test "$(field direct_unavailable)" = None
+ip addr add 198.51.100.88/32 dev itv0
+python3 "$WORK/udp-echo.py" > "$WORK/echo.out" &
+ECHO_PID=$!
+sleep 0.3
+DIRECT_OUT="$(ns setpriv --reuid "$IT_USER" --regid "$IT_USER" --init-groups env CSQTT_SOCKET="$WORK/run/csqttd.sock" "$WORK/csqtt-client" direct -- python3 "$WORK/udp-ping.py" 2>&1)"
+wait "$ECHO_PID"
+contains "csqtt direct: ответ получен мимо туннеля" "reply src=10.250.0.2" "$DIRECT_OUT"
+contains "источник подменён на адрес физического интерфейса" "src=10.250.0.2" "$(cat "$WORK/echo.out")"
+absent "пакет csqtt direct не попал в ядро" "dst=198.51.100.88" "$(core_log)"
+ns python3 "$WORK/udp-ping.py" >/dev/null 2>&1
+sleep 0.3
+contains "обычный процесс по-прежнему идёт в туннель" "dst=198.51.100.88" "$(core_log)"
+check "процесс завершился и вышел из группы" test "$(field direct_processes)" = 0
+contains "в журнале службы видно, кто ушёл мимо туннеля" "идёт мимо туннеля" "$(csqtt logs -n 0)"
+
+# Flatpak/Snap переносят себя в собственную systemd scope: имитируем это,
+# и служба должна вернуть процесс в группу до отправки пакета.
+python3 "$WORK/udp-echo.py" > "$WORK/echo.out" &
+ECHO_PID=$!
+sleep 0.3
+ESCAPE_OUT="$(ns sh -c 'mount -t cgroup2 none /sys/fs/cgroup && exec env CSQTT_SOCKET="$0/run/csqttd.sock" "$0/csqtt-client" direct -- sh -c "mkdir -p /sys/fs/cgroup/$1 && echo \$\$ > /sys/fs/cgroup/$1/cgroup.procs && sleep 2.5 && exec python3 $0/udp-ping.py"' "$WORK" "$ESCAPE_CG" 2>&1)"
+wait "$ECHO_PID"
+contains "процесс, ушедший в свою scope, возвращён и идёт мимо туннеля" "reply src=10.250.0.2" "$ESCAPE_OUT"
+contains "в журнале службы видно возвращение" "вернулся в группу" "$(csqtt logs -n 0)"
+ip addr del 198.51.100.88/32 dev itv0
+
 echo "== отключение"
 csqtt down >/dev/null
 check "состояние disconnected" test "$(state)" = disconnected
 absent "правила сняты" "lookup $TABLE" "$(ns ip -4 rule list)"
 absent "правило UID снято" "uidrange" "$(ns ip -4 rule list)"
+check "таблица nftables снята" bash -c "! ip netns exec $NS nft list table inet csqtt >/dev/null 2>&1"
 check "интерфейс удалён" bash -c "! ip netns exec $NS ip link show dev $IFACE"
 contains "resolv.conf восстановлен" "nameserver 9.9.9.9" "$(ns cat /etc/resolv.conf)"
 check "rp_filter возвращён" test "$(ns cat /proc/sys/net/ipv4/conf/all/rp_filter)" = 1

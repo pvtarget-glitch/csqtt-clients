@@ -41,8 +41,10 @@ table = 51998
 rule_priority = 9100
 dns = "resolvconf"
 domains_template = "/nonexistent"
+bypass_cgroup = "csqtt-gui-direct"
 CONF
-  ip netns exec "$NS" "$BIN/csqttd" --config "$WORK/csqttd.toml" >"$WORK/daemon.log" 2>&1 &
+  ip netns exec "$NS" sh -c 'mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null; exec "$0" --config "$1"' \
+    "$BIN/csqttd" "$WORK/csqttd.toml" >"$WORK/daemon.log" 2>&1 &
   echo $! > "$WORK/daemon.pid"
   for _ in $(seq 1 50); do [ -S "$WORK/run/csqttd.sock" ] && break; sleep 0.1; done
   [ -S "$WORK/run/csqttd.sock" ] || { echo "демон не стартовал"; cat "$WORK/daemon.log"; exit 1; }

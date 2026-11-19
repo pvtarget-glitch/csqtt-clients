@@ -34,3 +34,8 @@
 
 # Сколько строк журнала ядра хранить для `csqtt logs`.
 #log_lines = 2000
+
+# Программы мимо туннеля (`csqtt direct -- …`, вкладка «Программы»):
+# cgroup v2 для них, путь от корня cgroup. Нужен пакет nftables.
+#cgroup_root = "/sys/fs/cgroup"
+#bypass_cgroup = "csqtt-direct"

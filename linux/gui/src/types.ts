@@ -32,6 +32,8 @@ export interface Status {
   last_error: string | null;
   diagnosis: string | null;
   streams: StreamInfo[];
+  direct_processes: number;
+  direct_unavailable: string | null;
   dead_hashes: string[];
   captcha: CaptchaRequest | null;
   captcha_handlers: number;
@@ -99,4 +101,16 @@ export interface StreamInfo {
   worker: number;
   server: string;
   since: number;
+}
+
+/** Установленное приложение из .desktop-файла. */
+export interface AppEntry {
+  id: string;
+  name: string;
+  exec: string;
+  icon: string | null;
+  terminal: boolean;
+  categories: string | null;
+  /** Есть ярлык «… (мимо туннеля)» в меню. */
+  launcher: boolean;
 }

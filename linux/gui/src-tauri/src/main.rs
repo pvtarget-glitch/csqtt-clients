@@ -6,6 +6,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod apps;
 mod daemon;
 mod settings;
 
@@ -168,6 +169,21 @@ fn snapshot() -> Snapshot {
             message: Some(message),
         },
     }
+}
+
+#[tauri::command(async)]
+fn list_apps() -> Vec<apps::AppEntry> {
+    apps::list()
+}
+
+#[tauri::command(async)]
+fn launch_direct(id: String) -> Result<(), String> {
+    apps::launch(&id)
+}
+
+#[tauri::command(async)]
+fn set_direct_launcher(id: String, enabled: bool) -> Result<(), String> {
+    apps::set_launcher(&id, enabled)
 }
 
 #[tauri::command(async)]
@@ -353,6 +369,9 @@ fn main() {
             get_settings,
             save_settings,
             app_info,
+            list_apps,
+            launch_direct,
+            set_direct_launcher,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

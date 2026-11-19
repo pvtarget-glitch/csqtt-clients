@@ -15,6 +15,9 @@ pub enum Request {
         profile: Box<Profile>,
     },
     Down,
+    /// Перенести процесс, отправивший запрос, в группу «мимо туннеля».
+    /// PID берётся из SO_PEERCRED: перенести можно только себя.
+    Direct,
     /// Последние строки журнала ядра.
     Logs {
         #[serde(default)]
@@ -137,6 +140,12 @@ pub struct Status {
     /// Подсказка службы о вероятной причине, пока туннель не поднялся.
     #[serde(default)]
     pub diagnosis: Option<String>,
+    /// Сколько процессов сейчас идёт мимо туннеля (`csqtt direct`).
+    #[serde(default)]
+    pub direct_processes: u32,
+    /// Почему приложения мимо туннеля недоступны (None — доступны).
+    #[serde(default)]
+    pub direct_unavailable: Option<String>,
     /// Потоки по узлам VK (если ядро их сообщает).
     #[serde(default)]
     pub streams: Vec<StreamInfo>,
