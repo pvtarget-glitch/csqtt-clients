@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=csqtt
+GenericName=Туннель csqtt
+Comment=Подключение к серверу csqtt
+Exec=csqtt-gui
+Icon=csqtt
+Terminal=false
+Categories=Network;
+Keywords=vpn;tunnel;csqtt;туннель;
+StartupWMClass=csqtt-gui

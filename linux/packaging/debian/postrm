@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+fi
+if [ "$1" = "purge" ]; then
+    getent passwd csqtt-core >/dev/null && userdel csqtt-core >/dev/null 2>&1 || true
+    getent group csqtt >/dev/null && groupdel csqtt >/dev/null 2>&1 || true
+    rm -rf /etc/csqtt
+fi
+exit 0

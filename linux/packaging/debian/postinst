@@ -1,0 +1,31 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+    getent group csqtt >/dev/null || groupadd --system csqtt
+    if ! getent passwd csqtt-core >/dev/null; then
+        useradd --system --user-group --no-create-home --home-dir /nonexistent \
+            --shell /usr/sbin/nologin --comment "csqtt tunnel core" csqtt-core
+    fi
+
+    # Тому, кто ставит пакет через sudo, сразу даём право управлять туннелем.
+    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+        if ! id -nG "$SUDO_USER" | tr ' ' '\n' | grep -qx csqtt; then
+            usermod -aG csqtt "$SUDO_USER" || true
+            echo "csqtt-linux: пользователь $SUDO_USER добавлен в группу csqtt"
+        fi
+    else
+        echo "csqtt-linux: добавь себя в группу управления: sudo usermod -aG csqtt \$USER"
+    fi
+
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload || true
+        systemctl enable csqttd.service >/dev/null 2>&1 || true
+        if [ -n "$2" ]; then
+            systemctl try-restart csqttd.service || true
+        else
+            systemctl start csqttd.service || true
+        fi
+    fi
+fi
+exit 0

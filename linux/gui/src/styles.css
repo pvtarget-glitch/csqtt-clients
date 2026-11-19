@@ -1,0 +1,372 @@
+/*
+  csqtt-linux: «линия».
+  Туннель прячется в звонке, поэтому интерфейс говорит языком линии связи:
+  поле потоков — как панель коммутатора, цвет — только там, где линия жива.
+*/
+
+:root {
+  --paper: #eef1f3;
+  --raised: #ffffff;
+  --ink: #16212b;
+  --muted: #5c6976;
+  --rule: #d3dae0;
+  --cell: #cfd7de;
+  --line: #0b8a7a;
+  --line-ink: #ffffff;
+  --wait: #a86f06;
+  --fault: #b5392a;
+  --fault-wash: #f6e3df;
+  --wait-wash: #f5ead2;
+
+  --font: "Onest Variable", "Onest", system-ui, sans-serif;
+  --mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+
+  --step--1: 0.8125rem;
+  --step-0: 0.9375rem;
+  --step-1: 1.125rem;
+  --step-3: 2.125rem;
+
+  --gap: 20px;
+  --radius: 10px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #131a21;
+    --raised: #1b242d;
+    --ink: #e3eaf0;
+    --muted: #8f9cab;
+    --rule: #2b3640;
+    --cell: #2c3742;
+    --line: #2fc2ac;
+    --line-ink: #06231f;
+    --wait: #e0a93a;
+    --fault: #ee6a57;
+    --fault-wash: #3a211e;
+    --wait-wash: #37301c;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: var(--step-0);
+  line-height: 1.45;
+  font-feature-settings: "tnum" 1;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+h1,
+h2,
+p,
+dl,
+dd,
+ul {
+  margin: 0;
+  padding: 0;
+}
+
+ul {
+  list-style: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+input,
+textarea {
+  user-select: text;
+}
+
+:focus-visible {
+  outline: 2px solid var(--line);
+  outline-offset: 2px;
+}
+
+/* --- каркас ------------------------------------------------------------- */
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px var(--gap) 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.tab {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 8px 10px 11px;
+  margin-bottom: -1px;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--ink);
+}
+
+.tab[aria-current="page"] {
+  color: var(--ink);
+  font-weight: 600;
+  border-bottom-color: var(--ink);
+}
+
+.view {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 28px var(--gap) 24px;
+}
+
+.view--flush {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+/* --- текст -------------------------------------------------------------- */
+
+.title {
+  font-size: var(--step-1);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.quiet {
+  color: var(--muted);
+}
+
+.small {
+  font-size: var(--step--1);
+}
+
+.selectable {
+  user-select: text;
+  cursor: text;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  user-select: text;
+}
+
+/* --- кнопки и поля ------------------------------------------------------- */
+
+.button {
+  appearance: none;
+  border: 1px solid var(--rule);
+  background: var(--raised);
+  border-radius: var(--radius);
+  padding: 9px 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.button:hover:not(:disabled) {
+  border-color: var(--muted);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.button--main {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+  font-weight: 600;
+  padding: 14px 18px;
+  font-size: var(--step-1);
+  width: 100%;
+}
+
+.button--main:hover:not(:disabled) {
+  border-color: var(--ink);
+  filter: brightness(1.12);
+}
+
+.button--stop {
+  background: transparent;
+  color: var(--ink);
+}
+
+.button--danger {
+  color: var(--fault);
+}
+
+.link {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--muted);
+  cursor: pointer;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field > span {
+  font-size: var(--step--1);
+  color: var(--muted);
+}
+
+.input {
+  width: 100%;
+  border: 1px solid var(--rule);
+  background: var(--raised);
+  border-radius: var(--radius);
+  padding: 9px 12px;
+}
+
+.input:focus {
+  outline: 2px solid var(--line);
+  outline-offset: 0;
+  border-color: transparent;
+}
+
+select.input {
+  appearance: none;
+  padding-right: 34px;
+  cursor: pointer;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 19px) 50%,
+    calc(100% - 14px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+
+textarea.input {
+  resize: vertical;
+  min-height: 84px;
+  font-family: var(--mono);
+  font-size: var(--step--1);
+  line-height: 1.6;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.row > .grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.check {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.check input {
+  margin-top: 3px;
+  accent-color: var(--line);
+  width: 16px;
+  height: 16px;
+}
+
+/* --- сообщения ----------------------------------------------------------- */
+
+.note {
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  background: var(--raised);
+  border: 1px solid var(--rule);
+}
+
+.note--fault {
+  background: var(--fault-wash);
+  border-color: transparent;
+}
+
+.note--wait {
+  background: var(--wait-wash);
+  border-color: transparent;
+}
+
+.note strong {
+  display: block;
+  font-weight: 600;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: var(--paper);
+  padding: 9px 16px;
+  border-radius: 999px;
+  font-size: var(--step--1);
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: calc(100% - 32px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

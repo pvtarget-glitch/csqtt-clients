@@ -1,0 +1,203 @@
+#!/usr/bin/python3
+"""Окно ручной капчи VK для csqtt-linux.
+
+Ядро csqtt, когда VK требует проверку «я не робот», отдаёт хосту адрес
+страницы проверки. Этот помощник показывает страницу в WebKitGTK, человек
+проходит проверку сам, а помощник забирает из ответа VK
+(captchaNotRobot.check) выданный success_token и печатает его в stdout:
+
+    TOKEN <токен>      код выхода 0
+    ERROR <причина>    код выхода 1 (ошибка), 2 (окно закрыто), 3 (тайм-аут)
+
+Помощник ничего не решает автоматически и не хранит куки: веб-контекст
+эфемерный и уничтожается вместе с окном.
+"""
+
+import argparse
+import json
+import sys
+from urllib.parse import urlsplit
+
+ALLOWED_DOMAINS = ("vk.com", "vk.ru", "ok.ru", "okcdn.ru")
+
+# Перехват ответа на captchaNotRobot.check. Ставится до скриптов страницы,
+# во все фреймы; сам запрос и ответ не изменяются.
+HOOK_JS = r"""
+(function () {
+  if (window.__csqttCaptchaHook) return;
+  window.__csqttCaptchaHook = true;
+
+  function report(kind, value) {
+    try {
+      window.webkit.messageHandlers.csqtt.postMessage(JSON.stringify({ kind: kind, value: value }));
+    } catch (e) {}
+  }
+  function inspect(data) {
+    try {
+      if (typeof data === 'string') data = JSON.parse(data);
+      if (data && data.response && data.response.success_token) {
+        report('token', String(data.response.success_token));
+      } else if (data && data.error) {
+        report('error', JSON.stringify(data.error).slice(0, 300));
+      }
+    } catch (e) {}
+  }
+  function isCheck(url) {
+    return typeof url === 'string' && url.indexOf('captchaNotRobot.check') !== -1;
+  }
+
+  var originalFetch = window.fetch;
+  if (originalFetch) {
+    window.fetch = function (input) {
+      var url = typeof input === 'string' ? input : (input && input.url) || '';
+      var promise = originalFetch.apply(this, arguments);
+      if (isCheck(String(url))) {
+        promise.then(function (response) {
+          response.clone().text().then(inspect, function () {});
+        }, function () {});
+      }
+      return promise;
+    };
+  }
+
+  var originalOpen = XMLHttpRequest.prototype.open;
+  var originalSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function (method, url) {
+    this.__csqttUrl = String(url || '');
+    return originalOpen.apply(this, arguments);
+  };
+  XMLHttpRequest.prototype.send = function () {
+    var request = this;
+    if (isCheck(request.__csqttUrl)) {
+      request.addEventListener('load', function () {
+        var body;
+        try { body = request.responseText; } catch (e) { body = request.response; }
+        inspect(body);
+      });
+    }
+    return originalSend.apply(this, arguments);
+  };
+})();
+"""
+
+
+def url_allowed(url, insecure_test=False):
+    """Только HTTPS-страницы VK/OK — то же правило, что в ядре и на Android."""
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").rstrip(".").lower()
+    except ValueError:
+        return False
+    if insecure_test:
+        return parts.scheme in ("http", "https") and host in ("127.0.0.1", "localhost")
+    if parts.scheme != "https" or parts.username or parts.password:
+        return False
+    return any(host == domain or host.endswith("." + domain) for domain in ALLOWED_DOMAINS)
+
+
+def finish(kind, value, code):
+    sys.stdout.write("%s %s\n" % (kind, value))
+    sys.stdout.flush()
+    sys.exit(code)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Окно ручной капчи VK для csqtt")
+    parser.add_argument("--url", required=True, help="адрес страницы проверки (https, домены VK)")
+    parser.add_argument("--timeout", type=int, default=55, help="сколько секунд ждать решения")
+    parser.add_argument("--insecure-test", action="store_true", help=argparse.SUPPRESS)
+    arguments = parser.parse_args()
+
+    if not url_allowed(arguments.url, arguments.insecure_test):
+        finish("ERROR", "captcha url is not allowed", 1)
+
+    try:
+        import gi
+
+        gi.require_version("Gtk", "3.0")
+        gi.require_version("WebKit2", "4.1")
+        from gi.repository import GLib, Gtk, WebKit2
+    except (ImportError, ValueError) as error:
+        sys.stderr.write(
+            "csqtt-captcha: нужны пакеты python3-gi, gir1.2-gtk-3.0, gir1.2-webkit2-4.1 (%s)\n" % error
+        )
+        finish("ERROR", "webkitgtk is not installed", 1)
+
+    if not Gtk.init_check(None)[0]:
+        finish("ERROR", "no graphical session", 1)
+
+    state = {"result": None}
+
+    def stop(kind, value, code):
+        if state["result"] is None:
+            state["result"] = (kind, value, code)
+            Gtk.main_quit()
+
+    def on_message(_manager, js_result):
+        try:
+            message = json.loads(js_result.get_js_value().to_string())
+        except (ValueError, AttributeError):
+            return
+        value = str(message.get("value", ""))
+        # Токен уходит в командный канал ядра одной строкой.
+        if message.get("kind") == "token" and value and value.isprintable() and " " not in value:
+            stop("TOKEN", value, 0)
+        elif message.get("kind") == "error":
+            stop("ERROR", "vk rejected the check: " + value.replace("\n", " "), 1)
+
+    def on_policy(_view, decision, decision_type):
+        if decision_type in (
+            WebKit2.PolicyDecisionType.NAVIGATION_ACTION,
+            WebKit2.PolicyDecisionType.NEW_WINDOW_ACTION,
+        ):
+            uri = decision.get_navigation_action().get_request().get_uri() or ""
+            if not (uri.startswith("about:") or url_allowed(uri, arguments.insecure_test)):
+                decision.ignore()
+                return True
+        return False
+
+    def on_timeout():
+        stop("ERROR", "timeout", 3)
+        return False
+
+    content = WebKit2.UserContentManager()
+    content.register_script_message_handler("csqtt")
+    content.connect("script-message-received::csqtt", on_message)
+    content.add_script(
+        WebKit2.UserScript.new(
+            HOOK_JS,
+            WebKit2.UserContentInjectedFrames.ALL_FRAMES,
+            WebKit2.UserScriptInjectionTime.START,
+            None,
+            None,
+        )
+    )
+
+    view = WebKit2.WebView(
+        web_context=WebKit2.WebContext.new_ephemeral(),
+        user_content_manager=content,
+    )
+    settings = view.get_settings()
+    settings.set_enable_developer_extras(False)
+    settings.set_javascript_can_open_windows_automatically(False)
+    view.connect("decide-policy", on_policy)
+
+    window = Gtk.Window(title="csqtt — проверка VK")
+    window.set_default_size(440, 600)
+    window.set_position(Gtk.WindowPosition.CENTER)
+    window.set_keep_above(True)
+    window.connect("destroy", lambda _window: stop("ERROR", "cancelled", 2))
+    window.add(view)
+    window.show_all()
+    window.present()
+
+    GLib.timeout_add_seconds(max(5, arguments.timeout), on_timeout)
+    view.load_uri(arguments.url)
+    Gtk.main()
+
+    kind, value, code = state["result"] or ("ERROR", "cancelled", 2)
+    finish(kind, value, code)
+
+
+if __name__ == "__main__":
+    main()
