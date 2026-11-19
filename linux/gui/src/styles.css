@@ -112,9 +112,53 @@ textarea {
 
 .tabs {
   display: flex;
-  gap: 0;
+  align-items: flex-end;
+  gap: 4px;
   padding: 10px var(--gap) 0;
   border-bottom: 1px solid var(--rule);
+}
+
+/* Текстовые вкладки прокручиваются, если не влезают (крупный шрифт,
+   узкое окно); полоса прокрутки не нужна — колесо и тачпад работают. */
+.tab-strip {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  margin-bottom: -1px;
+}
+
+.tab-strip .tab {
+  margin-bottom: 0;
+}
+
+.tab-strip.fade-end {
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+
+.tab-strip.fade-start {
+  mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent);
+}
+
+.tab-strip.fade-start.fade-end {
+  mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+}
+
+.tab-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.tab--icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 7px 8px 10px;
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--line);
+  outline-offset: -2px;
 }
 
 .tab {
@@ -124,6 +168,7 @@ textarea {
   padding: 8px 8px 11px;
   margin-bottom: -1px;
   white-space: nowrap;
+  flex: none;
   color: var(--muted);
   border-bottom: 2px solid transparent;
   cursor: pointer;
