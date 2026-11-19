@@ -190,9 +190,12 @@ check "csqtt logs | head завершается без падения" bash -c "
 check "повторный up отклонён" bash -c "! ip netns exec $NS env CSQTT_SOCKET=$WORK/run/csqttd.sock CSQTT_CONFIG_DIR=$WORK/config $BIN/csqtt up ok"
 
 echo "== права доступа к сокету"
-DENIED="$(ns setpriv --reuid nobody --regid nogroup --clear-groups env CSQTT_SOCKET="$WORK/run/csqttd.sock" "$BIN/csqtt" status 2>&1)"
+# Домашний каталог раннера CI закрыт для других пользователей (0750) —
+# кладём клиент туда, откуда его может запустить кто угодно.
+install -m 0755 "$BIN/csqtt" "$WORK/csqtt-client"
+DENIED="$(ns setpriv --reuid nobody --regid nogroup --clear-groups env CSQTT_SOCKET="$WORK/run/csqttd.sock" "$WORK/csqtt-client" status 2>&1)"
 contains "посторонний пользователь не управляет туннелем" "нет прав" "$DENIED"
-ALLOWED="$(ns setpriv --reuid "$IT_USER" --regid "$IT_USER" --init-groups env CSQTT_SOCKET="$WORK/run/csqttd.sock" "$BIN/csqtt" status 2>&1)"
+ALLOWED="$(ns setpriv --reuid "$IT_USER" --regid "$IT_USER" --init-groups env CSQTT_SOCKET="$WORK/run/csqttd.sock" "$WORK/csqtt-client" status 2>&1)"
 contains "участник группы csqtt управляет туннелем" "подключено" "$ALLOWED"
 
 echo "== отключение"
