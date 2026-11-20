@@ -54,6 +54,20 @@ export async function openReleasePage(url: string) {
   }
 }
 
+/** Как ядро: группы по 10 потоков, вниз; 5 — минимум, 100 — максимум. */
+export function normalizeWorkers(requested: number): number {
+  if (requested <= 5) return 5;
+  return Math.floor(Math.min(100, Math.max(10, requested)) / 10) * 10;
+}
+
+export async function openPanel(name: string) {
+  try {
+    await invoke("open_panel", { name });
+  } catch (error) {
+    fail(error);
+  }
+}
+
 export async function restartApp() {
   await invoke("restart_app");
 }

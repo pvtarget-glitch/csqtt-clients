@@ -437,6 +437,7 @@ fn main() {
             updater::update_install,
             updater::restart_app,
             updater::open_release_page,
+            updater::open_panel,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

@@ -158,7 +158,9 @@ ${3:-}
 EOF
 }
 : > "$WORK/config/profiles.toml"
-for scenario in ok captcha fatal crash restart routing tunlost wide silent; do profile "$scenario" "$scenario"; done
+for scenario in ok captcha fatal crash restart routing tunlost silent; do profile "$scenario" "$scenario"; done
+# Профиль администратора: адрес панели служба принимает, ядру он не нужен.
+profile wide wide 'panel_url = "https://203.0.113.7:46002/s3cr3t-panel-path"' 
 profile persistent crash "persistent = true"
 profile selected ok "selected_apps_only = true"
 api_profile() { # api_profile имя сценарий токен
@@ -415,6 +417,8 @@ echo "== сервер назначает число потоков"
 csqtt up wide >/dev/null 2>&1
 sleep 1
 check "число потоков от сервера" test "$(field workers_target)" = 40
+contains "status объясняет лимит из панели" "назначено сервером (в профиле 10)" "$(csqtt status)"
+absent "адрес панели не уходит ядру" "s3cr3t-panel-path" "$(core_log)"
 csqtt down >/dev/null
 absent "новая сессия начинает журнал заново" "scenario=wide" "$(csqtt up tunlost >/dev/null 2>&1; core_log)"
 csqtt down >/dev/null

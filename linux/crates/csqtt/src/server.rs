@@ -215,9 +215,12 @@ pub fn run(command: ServerCommand) -> Result<()> {
                 vk_token: String::new(),
             };
             let mut store = Store::load()?;
-            store
+            let mut profile = store
                 .import_link(&name, &link)
                 .map_err(anyhow::Error::msg)?;
+            // Адрес панели — только в локальный профиль администратора.
+            profile.panel_url = report.panel_url.clone();
+            store.upsert(profile.sanitize_draft().map_err(anyhow::Error::msg)?);
             if store.default.is_none() {
                 store.default = Some(name.clone());
             }
@@ -228,7 +231,10 @@ pub fn run(command: ServerCommand) -> Result<()> {
             println!("Профиль «{name}» сохранён. Добавь хеши VK-звонков:");
             println!("  csqtt hashes {name} <хеш или ссылка vk.com/call/join/…>");
             println!();
-            println!("Панель:  {}", report.panel_url);
+            println!(
+                "Панель:  {}  (откроется командой csqtt panel {name})",
+                report.panel_url
+            );
             println!("Логин:   {}", options.web_user);
             println!("Пароль:  {}", options.web_password);
             println!("Сохрани логин и пароль панели — повторно их не показать.");

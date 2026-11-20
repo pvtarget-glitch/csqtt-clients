@@ -1,6 +1,7 @@
 //! Общие типы csqtt-linux: ссылки `csqtt://`, профили, протокол сокета
 //! демона и разбор конфигурации туннеля, которую присылает ядро.
 
+pub mod browser;
 pub mod captcha;
 pub mod client;
 pub mod deploy;

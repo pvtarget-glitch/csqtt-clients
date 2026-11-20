@@ -11,7 +11,9 @@ import {
   formatDuration,
   isActive,
   loadProfiles,
+  normalizeWorkers,
   notify,
+  openPanel,
 } from "../store";
 
 const now = ref(Date.now());
@@ -58,10 +60,18 @@ const where = computed(() => {
   return "";
 });
 
-function normalizeWorkers(requested: number): number {
-  if (requested <= 5) return 5;
-  return Math.floor(Math.min(100, Math.max(10, requested)) / 10) * 10;
-}
+/** Профиль подключённой сессии (может отличаться от выбранного). */
+const sessionProfile = computed(
+  () => app.profiles.find((item) => item.name === status.value?.profile) ?? null,
+);
+
+/** Сервер назначил своё число потоков (лимит доступа в веб-панели). */
+const serverWorkers = computed(() => {
+  const target = status.value?.workers_target ?? 0;
+  if (!active.value || !sessionProfile.value || target <= 0) return null;
+  const own = normalizeWorkers(sessionProfile.value.workers);
+  return target !== own ? { target, own } : null;
+});
 
 const total = computed(() => {
   if (active.value && status.value) {
@@ -184,7 +194,19 @@ const needsHashes = computed(
             <template v-if="active">
               Потоков активно: {{ status?.active_workers ?? 0 }} из {{ total }}
             </template>
-            <template v-else>Потоков по настройке сервера: {{ total }}</template>
+            <template v-else>Потоков в настройках сервера: {{ total }}</template>
+          </p>
+          <p v-if="serverWorkers" class="small quiet">
+            Сервер назначил {{ serverWorkers.target }} (в профиле {{ serverWorkers.own }}): число
+            потоков для этого доступа задано в веб-панели сервера.
+            <button
+              v-if="sessionProfile?.panel_url"
+              class="link small"
+              type="button"
+              @click="openPanel(sessionProfile.name)"
+            >
+              Открыть панель
+            </button>
           </p>
           <details v-if="active && nodes.length" class="nodes">
             <summary class="small">

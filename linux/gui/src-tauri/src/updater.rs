@@ -146,6 +146,20 @@ pub fn spawn_background(app: AppHandle, enabled: impl Fn() -> bool + Send + 'sta
     });
 }
 
+/// Открывает веб-панель сервера из сохранённого профиля. Адрес берётся из
+/// профиля, а не со страницы: окно не может открыть произвольную ссылку.
+#[tauri::command]
+pub fn open_panel(name: String) -> Result<(), String> {
+    let store = csqtt_common::store::Store::load().map_err(|error| format!("{error:#}"))?;
+    let profile = store
+        .find(&name)
+        .ok_or_else(|| format!("нет профиля «{name}»"))?;
+    if !csqtt_common::profile::panel_url_valid(&profile.panel_url) {
+        return Err("у сервера нет адреса панели".into());
+    }
+    csqtt_common::browser::open(&profile.panel_url)
+}
+
 /// Открывает в браузере страницу репозитория или выпуска. Только адреса
 /// этого репозитория: команда доступна странице окна, лишнего она открыть
 /// не должна.

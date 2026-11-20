@@ -1,7 +1,15 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { app, copyText, fail, loadProfiles, notify } from "../store";
+import {
+  app,
+  copyText,
+  fail,
+  loadProfiles,
+  normalizeWorkers,
+  notify,
+  openPanel,
+} from "../store";
 import type { Profile } from "../types";
 
 const props = defineProps<{ name: string }>();
@@ -83,6 +91,10 @@ const lines = (text: string) =>
 
 const hashCount = computed(() => lines(hashes.value).length);
 const isDefault = computed(() => !isNew && props.name === app.defaultProfile);
+if (draft.panel_url === undefined) draft.panel_url = "";
+/** Во что ядро округлит введённое число потоков. */
+const workersEffective = computed(() => normalizeWorkers(Number(draft.workers) || 0));
+const savedPanel = computed(() => !isNew && !!original?.panel_url && original.panel_url === draft.panel_url);
 
 function collect(): Profile {
   const profile: Profile = JSON.parse(JSON.stringify(draft));
@@ -254,7 +266,10 @@ async function copyLink() {
         <div class="pair">
           <label class="field">
             <span>Потоков (10–100, шаг 10)</span>
-            <input v-model="draft.workers" class="input" type="number" min="5" max="100" />
+            <input v-model="draft.workers" class="input" type="number" min="5" max="100" step="10" />
+            <span v-if="workersEffective !== Number(draft.workers)" class="quiet small">
+              Потоки идут группами по 10: будет {{ workersEffective }}
+            </span>
           </label>
           <label class="field">
             <span>Транспорт до VK</span>
@@ -359,6 +374,28 @@ async function copyLink() {
           <span>Адреса и подсети, по одному в строке: 192.0.2.0/24</span>
           <textarea v-model="ips" class="input" rows="3" spellcheck="false" />
         </label>
+      </fieldset>
+
+      <fieldset class="group">
+        <legend>Администратору</legend>
+        <label class="field">
+          <span>Веб-панель сервера</span>
+          <input
+            v-model="draft.panel_url"
+            class="input"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="https://IP:46002/секретный_путь"
+          />
+        </label>
+        <p class="quiet small">
+          Сохраняется сама, если сервер установлен из csqtt. Адрес хранится только на этом
+          компьютере и в ссылку <code>csqtt://</code> не попадает. В панели задаются лимиты
+          доступа: если там указано число потоков, оно главнее числа в этом профиле.
+        </p>
+        <div v-if="savedPanel">
+          <button class="button" type="button" @click="openPanel(props.name)">Открыть панель</button>
+        </div>
       </fieldset>
 
       <div v-if="error" class="note note--fault selectable">{{ error }}</div>

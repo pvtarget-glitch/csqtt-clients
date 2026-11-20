@@ -49,6 +49,20 @@ enum Command {
         #[arg(required = true)]
         hashes: Vec<String>,
     },
+    /// Открыть веб-панель сервера в браузере (для администратора)
+    Panel {
+        /// Профиль (по умолчанию — профиль по умолчанию)
+        name: Option<String>,
+        /// Запомнить адрес панели: https://IP:порт/секретный_путь
+        #[arg(long, value_name = "URL", conflicts_with = "clear")]
+        set: Option<String>,
+        /// Забыть адрес панели
+        #[arg(long)]
+        clear: bool,
+        /// Только напечатать адрес, браузер не открывать
+        #[arg(long)]
+        print: bool,
+    },
     /// Проверить обновления и установить новую версию
     Update {
         /// Только проверить, ничего не скачивать
@@ -163,6 +177,12 @@ fn run(command: Command) -> Result<()> {
         Command::Hashes { name, hashes } => set_hashes(&name, &hashes),
         Command::VkLogin { name, js } => vk_login(name.as_deref(), js),
         Command::Update { check, yes } => update(check, yes),
+        Command::Panel {
+            name,
+            set,
+            clear,
+            print,
+        } => panel(name.as_deref(), set, clear, print),
         Command::Default { name } => {
             let mut store = Store::load()?;
             store.resolve(Some(&name))?;
@@ -274,6 +294,9 @@ fn show(name: Option<&str>, secrets: bool) -> Result<()> {
         if !profile.vk_token.is_empty() {
             profile.vk_token = mask(&profile.vk_token);
         }
+        if !profile.panel_url.is_empty() {
+            profile.panel_url = csqtt_common::browser::masked_panel_url(&profile.panel_url);
+        }
     }
     print!("{}", toml::to_string_pretty(&profile)?);
     Ok(())
@@ -334,6 +357,43 @@ fn vk_login(name: Option<&str>, js: bool) -> Result<()> {
     store.upsert(profile);
     store.save()?;
     println!("Чтобы применить: csqtt down && csqtt up {name}");
+    Ok(())
+}
+
+fn panel(name: Option<&str>, set: Option<String>, clear: bool, print: bool) -> Result<()> {
+    let mut store = Store::load()?;
+    let mut profile = store.resolve(name)?.clone();
+    let name = profile.name.clone();
+    if set.is_some() || clear {
+        profile.panel_url = set.unwrap_or_default();
+        let profile = profile.sanitize_draft().map_err(anyhow::Error::msg)?;
+        let saved = !profile.panel_url.is_empty();
+        store.upsert(profile);
+        store.save()?;
+        println!(
+            "Профиль «{name}»: адрес панели {}",
+            if saved {
+                "сохранён"
+            } else {
+                "удалён"
+            }
+        );
+        return Ok(());
+    }
+    if profile.panel_url.is_empty() {
+        bail!(
+            "у профиля «{name}» нет адреса панели. Он сохраняется сам при установке сервера \
+             из csqtt, иначе укажи его: csqtt panel {name} --set https://IP:46002/секретный_путь"
+        );
+    }
+    // На macOS и Windows браузер есть всегда, на Linux — при графическом сеансе.
+    let graphical = !cfg!(target_os = "linux") || csqtt_common::captcha::has_display();
+    if print || !graphical {
+        println!("{}", profile.panel_url);
+        return Ok(());
+    }
+    csqtt_common::browser::open(&profile.panel_url).map_err(anyhow::Error::msg)?;
+    println!("Панель открыта в браузере. Сертификат у панели свой, браузер предупредит о нём.");
     Ok(())
 }
 
@@ -498,6 +558,18 @@ fn print_status(status: &Status) {
                 "Потоки:       {} из {}",
                 status.active_workers, status.workers_target
             );
+            // Лимит доступа из веб-панели главнее числа в профиле.
+            let own = status.profile.as_deref().and_then(|name| {
+                Store::load()
+                    .ok()?
+                    .find(name)
+                    .map(|p| p.normalized_workers())
+            });
+            if let Some(own) = own.filter(|own| *own != status.workers_target) {
+                println!(
+                    "              назначено сервером (в профиле {own}): лимит задан в веб-панели"
+                );
+            }
         } else {
             println!("Потоки:       {} активных", status.active_workers);
         }

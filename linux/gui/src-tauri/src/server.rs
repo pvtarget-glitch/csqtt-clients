@@ -238,7 +238,10 @@ pub fn install(
         vk_token: String::new(),
     };
     let mut store = Store::load().map_err(|error| format!("{error:#}"))?;
-    store.import_link(&name, &link)?;
+    let mut profile = store.import_link(&name, &link)?;
+    // Адрес панели — только в локальный профиль администратора.
+    profile.panel_url = report.panel_url.clone();
+    store.upsert(profile.sanitize_draft()?);
     if store.default.is_none() {
         store.default = Some(name.clone());
     }

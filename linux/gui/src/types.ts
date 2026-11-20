@@ -74,6 +74,8 @@ export interface Profile {
   /** "auto_js" (по умолчанию) или "auto_api". */
   vk_hash_mode?: string;
   workers: number;
+  /** Адрес веб-панели сервера (только у администратора). */
+  panel_url?: string;
   fingerprint: string;
   client_ids: string;
   obfs: string;

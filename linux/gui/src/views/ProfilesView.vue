@@ -3,7 +3,7 @@ import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import ProfileEditor from "../components/ProfileEditor.vue";
 import ServerDeploy from "../components/ServerDeploy.vue";
-import { app, fail, loadProfiles, notify } from "../store";
+import { app, fail, loadProfiles, notify, openPanel } from "../store";
 import type { Profile } from "../types";
 
 const link = ref("");
@@ -59,7 +59,7 @@ async function addFromLink() {
       <div v-if="app.error" class="note note--fault selectable">{{ app.error }}</div>
 
       <ul v-if="app.profiles.length" class="servers">
-        <li v-for="profile in app.profiles" :key="profile.name">
+        <li v-for="profile in app.profiles" :key="profile.name" class="servers__item">
           <button class="server" type="button" @click="app.editing = profile.name">
             <span class="server__name">{{ profile.name }}</span>
             <span class="server__meta quiet small">
@@ -68,6 +68,15 @@ async function addFromLink() {
             <span v-if="profile.name === app.defaultProfile" class="server__mark small">
               основной
             </span>
+          </button>
+          <button
+            v-if="profile.panel_url"
+            class="link small servers__panel"
+            type="button"
+            title="Открыть веб-панель сервера в браузере"
+            @click="openPanel(profile.name)"
+          >
+            Панель
           </button>
         </li>
       </ul>
@@ -93,6 +102,22 @@ async function addFromLink() {
 
 .servers {
   border-top: 1px solid var(--rule);
+}
+
+.servers__item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.servers__item .server {
+  flex: 1 1 auto;
+  border-bottom: 0;
+}
+
+.servers__panel {
+  flex: none;
 }
 
 .server {

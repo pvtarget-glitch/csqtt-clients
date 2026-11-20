@@ -124,6 +124,11 @@ pub struct Profile {
     /// `csqtt tunnel`; остальное и DNS системы — напрямую.
     #[serde(default)]
     pub selected_apps_only: bool,
+    /// Адрес веб-панели сервера (`https://хост:порт/секретный_путь`) — для
+    /// администратора. Секретный путь равнозначен второму паролю, поэтому в
+    /// ссылки `csqtt://` и в экспорт адрес не попадает.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub panel_url: String,
 }
 
 impl Profile {
@@ -153,6 +158,7 @@ impl Profile {
             routing: Routing::default(),
             persistent: false,
             selected_apps_only: false,
+            panel_url: String::new(),
         }
     }
 
@@ -242,6 +248,10 @@ impl Profile {
             return Err("password не задан".into());
         }
         check_plain("password", &self.password, 256)?;
+        self.panel_url = self.panel_url.trim().to_owned();
+        if !self.panel_url.is_empty() && !panel_url_valid(&self.panel_url) {
+            return Err("адрес панели: ожидается https://хост:порт/путь".into());
+        }
 
         self.hashes = self
             .hashes
@@ -386,6 +396,29 @@ pub fn canonical_ipv4_nets(networks: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// `https://хост[:порт][/путь]` без пробелов, кавычек и прочего лишнего.
+pub fn panel_url_valid(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let (authority, _path) = rest.split_once('/').unwrap_or((rest, ""));
+    let host = match authority.rsplit_once(':') {
+        Some((host, port)) if port.parse::<u16>().is_ok_and(|port| port > 0) => host,
+        Some(_) => return false,
+        None => authority,
+    };
+    url.len() <= 512
+        && !host.is_empty()
+        && host.chars().all(is_host_char)
+        && url.chars().all(|c| {
+            c.is_ascii_graphic()
+                && !matches!(
+                    c,
+                    '"' | '\'' | '<' | '>' | '\\' | '`' | '^' | '|' | '{' | '}'
+                )
+        })
+}
+
 fn is_name_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '-' | '_' | '.')
 }
@@ -445,6 +478,35 @@ mod tests {
                 vk_token: String::new(),
             },
         )
+    }
+
+    #[test]
+    fn panel_url_checked_and_kept_out_of_links() {
+        for good in [
+            "https://203.0.113.7:46002/2f9c1e0a-7b1d-4c3e",
+            "https://vps.example.org/panel",
+            "https://[2001:db8::1]:46002/x",
+        ] {
+            assert!(panel_url_valid(good), "{good}");
+        }
+        for bad in [
+            "http://203.0.113.7:46002/x",
+            "https://203.0.113.7:0/x",
+            "https://203.0.113.7:46002/a b",
+            "https://203.0.113.7:46002/a\"b",
+            "https://:46002/x",
+            "javascript:alert(1)",
+        ] {
+            assert!(!panel_url_valid(bad), "{bad}");
+        }
+        let mut profile = sample();
+        profile.panel_url = " https://203.0.113.7:46002/secret ".into();
+        let profile = profile.sanitize().unwrap();
+        assert_eq!(profile.panel_url, "https://203.0.113.7:46002/secret");
+        assert!(!crate::link::format_link(&profile.to_link()).contains("secret"));
+        let mut bad = profile;
+        bad.panel_url = "ftp://x".into();
+        assert!(bad.sanitize().is_err());
     }
 
     #[test]
