@@ -61,7 +61,10 @@ BASE_DNS="$(probe dns 8.8.8.8)"
 echo "физический интерфейс $UPLINK; до подключения: tcp $BASE_TCP, dns $BASE_DNS"
 wfp_filters() {
   (cd "$WORK_UNIX" && netsh wfp show filters file=filters.xml > /dev/null 2>&1)
-  grep -c '<name>csqtt</name>' "$WORK_UNIX/filters.xml" 2>/dev/null || echo 0
+  local count
+  rm -f "$WORK_UNIX/filters.xml"
+  count="$(grep -c '<name>csqtt</name>' "$WORK_UNIX/filters.xml" 2>/dev/null)"
+  echo "${count:-0}"
 }
 
 "$BIN/csqttd.exe" --config "$WORK\\csqttd.toml" > "$WORK_UNIX/daemon.log" 2>&1 &
@@ -107,8 +110,9 @@ for _ in $(seq 1 30); do [ "$(field state)" = disconnected ] && break; sleep 0.2
 ROUTES="$(netsh interface ipv4 show route 2>&1)"
 absent "маршрут в туннель снят" "0.0.0.0/1" "$ROUTES"
 absent "маршрут исключения снят" "1.0.0.0/24" "$ROUTES"
-check_zero() { [ "$(wfp_filters)" = 0 ] && ok "$1" || bad "$1"; }
-check_zero "фильтры WFP сняты"
+# Служба фильтрации снимает фильтры закрытой сессии не мгновенно.
+for _ in $(seq 1 10); do LEFT="$(wfp_filters)"; [ "$LEFT" = 0 ] && break; sleep 0.5; done
+[ "$LEFT" = 0 ] && ok "фильтры WFP сняты" || bad "фильтры WFP сняты" "осталось: $LEFT; $(csqtt logs -n 0 | tail -5)"
 if [[ "$BASE_TCP" == open* ]]; then
   contains "после отключения сеть снова открыта" "open" "$(probe tcp 1.1.1.1)"
 fi
