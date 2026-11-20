@@ -17,6 +17,7 @@ function blank(): Profile {
     password: "",
     hashes: [],
     vk_token: "",
+    vk_hash_mode: "auto_api",
     workers: 18,
     fingerprint: "firefox",
     client_ids: "8202606,6287487",
@@ -47,6 +48,28 @@ const hashes = ref(draft.hashes.join("\n"));
 const domains = ref(draft.routing.domains.join("\n"));
 const ips = ref(draft.routing.ips.join("\n"));
 const source = ref<"hashes" | "token">(draft.vk_token ? "token" : "hashes");
+if (!draft.vk_hash_mode) draft.vk_hash_mode = "auto_js";
+const manualToken = ref(false);
+const loggingIn = ref(false);
+const loginNote = ref("");
+
+async function vkLogin() {
+  loggingIn.value = true;
+  loginNote.value = "";
+  error.value = "";
+  try {
+    const result = await invoke<{ token: string; expires_in: number }>("vk_login");
+    draft.vk_token = result.token;
+    loginNote.value =
+      result.expires_in === 0
+        ? "Вход выполнен. Сохрани сервер, чтобы применить."
+        : `VK выдал токен на ${Math.round(result.expires_in / 3600)} ч — потом вход придётся повторить.`;
+  } catch (reason) {
+    error.value = String(reason);
+  } finally {
+    loggingIn.value = false;
+  }
+}
 const showPassword = ref(false);
 const confirmDelete = ref(false);
 const saving = ref(false);
@@ -67,6 +90,10 @@ function collect(): Profile {
   profile.workers = Number(profile.workers) || 0;
   if (source.value === "token") {
     profile.hashes = [];
+    profile.vk_token = profile.vk_token.trim();
+    if (profile.vk_hash_mode === "auto_api" && profile.vk_auth_mode === "auto_js") {
+      profile.vk_auth_mode = "vkcalls";
+    }
   } else {
     profile.hashes = lines(hashes.value);
     profile.vk_token = "";
@@ -182,7 +209,7 @@ async function copyLink() {
           </label>
           <label class="check">
             <input v-model="source" type="radio" value="token" />
-            <span>VK-токен</span>
+            <span>Вход в VK</span>
           </label>
         </div>
         <label v-if="source === 'hashes'" class="field">
@@ -192,10 +219,34 @@ async function copyLink() {
           </span>
           <textarea v-model="hashes" class="input" rows="4" spellcheck="false" />
         </label>
-        <label v-else class="field">
-          <span>С токеном ядро создаёт звонки само и не зависит от чужих ссылок</span>
-          <input v-model="draft.vk_token" class="input" spellcheck="false" autocomplete="off" />
-        </label>
+        <template v-else>
+          <p class="hint">
+            Звонки создаются в твоём аккаунте VK при подключении и завершаются при
+            отключении — чужие ссылки не нужны.
+          </p>
+          <div class="login-row">
+            <button class="btn" type="button" :disabled="loggingIn" @click="vkLogin">
+              {{ loggingIn ? "Жду вход в окне VK…" : draft.vk_token ? "Войти заново" : "Войти в VK" }}
+            </button>
+            <span class="login-state">{{ draft.vk_token ? "Токен получен" : "Вход не выполнен" }}</span>
+          </div>
+          <p v-if="loginNote" class="hint">{{ loginNote }}</p>
+          <label class="field">
+            <span>Кто создаёт звонки</span>
+            <select v-model="draft.vk_hash_mode" class="input">
+              <option value="auto_api">Приложение через API VK (Auto API)</option>
+              <option value="auto_js">Ядро через аккаунт (Auto JS)</option>
+            </select>
+          </label>
+          <label class="check">
+            <input v-model="manualToken" type="checkbox" />
+            <span>Ввести токен вручную</span>
+          </label>
+          <label v-if="manualToken" class="field">
+            <span>VK access token</span>
+            <input v-model="draft.vk_token" class="input" spellcheck="false" autocomplete="off" />
+          </label>
+        </template>
       </fieldset>
 
       <fieldset class="group">
@@ -243,7 +294,12 @@ async function copyLink() {
             <select v-model="draft.vk_auth_mode" class="input">
               <option value="vkcalls">VK Calls</option>
               <option value="legacy">Старый способ</option>
-              <option value="auto_js" :disabled="source !== 'token'">Auto JS (нужен токен)</option>
+              <option
+                value="auto_js"
+                :disabled="source !== 'token' || draft.vk_hash_mode === 'auto_api'"
+              >
+                Auto JS (нужен вход и Auto JS для звонков)
+              </option>
             </select>
           </label>
         </div>
@@ -353,5 +409,21 @@ async function copyLink() {
 
 .actions__more {
   flex-wrap: wrap;
+}
+
+.hint {
+  margin: 0;
+  color: var(--muted);
+}
+
+.login-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.login-state {
+  color: var(--muted);
 }
 </style>

@@ -11,6 +11,7 @@ mod captcha_window;
 mod daemon;
 mod server;
 mod settings;
+mod vk_login_window;
 
 use csqtt_common::{
     client::socket_path,
@@ -199,6 +200,14 @@ fn deploy_remove(
     form: server::DeployForm,
 ) -> Result<(), String> {
     server::remove(&app, &state, form)
+}
+
+/// Окно входа в VK: возвращает токен для профиля (Auto API / Auto JS).
+#[tauri::command]
+async fn vk_login(app: tauri::AppHandle) -> Result<vk_login_window::LoginResult, String> {
+    tauri::async_runtime::spawn_blocking(move || vk_login_window::login(&app))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -412,6 +421,7 @@ fn main() {
             deploy_install,
             deploy_remove,
             deploy_cancel,
+            vk_login,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

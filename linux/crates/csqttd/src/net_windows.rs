@@ -176,8 +176,7 @@ impl Network {
             // Через IP Helper, а не netsh: адрес сразу «предпочтительный»,
             // без проверки на дубликаты, иначе первые секунды у адаптера нет
             // исходного адреса и отправка падает с «General failure».
-            crate::platform::add_ipv4_address(self.index, conf.ip, 32)
-                .context("адрес адаптера")?;
+            crate::platform::add_ipv4_address(self.index, conf.ip, 32).context("адрес адаптера")?;
             netsh(&[
                 "interface",
                 "ipv4",

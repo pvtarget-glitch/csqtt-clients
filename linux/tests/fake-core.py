@@ -6,7 +6,12 @@
 абстрактный UNIX-сокет (Linux) или пакеты по UDP от службы (macOS:
 --listen и --listen-peer). Сценарий выбирается «паролем» (CSQTT_PASSWORD):
 ok, captcha, fatal, crash, restart, routing, tunlost, wide (сервер назначает
-40 потоков, часть из них не поднимается).
+40 потоков, часть из них не поднимается), deadcalls (все звонки сразу
+завершены).
+
+Одноразовый режим Auto API (--vk-api=start|finish) отвечает строкой JSON,
+как настоящее ядро, и пишет вызовы в vk-api.log в рабочем каталоге. Токен
+vk1.invalid — «токен недействителен», vk1.empty — VK не создаёт звонков.
 """
 import array
 import base64
@@ -137,7 +142,35 @@ def wait_captcha(count, timeout=15):
     return len(captcha_results) >= count
 
 
+def vk_api():
+    token = os.environ.get("CSQTT_VK_TOKEN", "")
+    action = ARGS["vk-api"]
+    uid = os.getuid() if hasattr(os, "getuid") else 0
+    with open("vk-api.log", "a") as record:
+        record.write("%s count=%s calls=%s token=%s uid=%d bind=%s argv_token=%s\n" % (
+            action, ARGS.get("vk-api-count", ""), ARGS.get("vk-api-calls", ""),
+            "yes" if token else "no", uid, ARGS.get("bind-interface", "-"),
+            "yes" if token and token in " ".join(sys.argv) else "no"))
+    if action == "finish":
+        calls = [c for c in ARGS.get("vk-api-calls", "").split(",") if c]
+        print(json.dumps({"finished": len(calls), "total": len(calls)}))
+        return
+    if token == "vk1.invalid":
+        print(json.dumps({"calls": [], "requested": 1, "token_invalid": True, "error": "код 5: User authorization failed"}))
+        return
+    count = int(ARGS.get("vk-api-count", "1"))
+    if token == "vk1.empty":
+        print(json.dumps({"calls": [], "requested": count, "token_invalid": False, "error": "код 9: Flood control"}))
+        return
+    stamp = "%06d" % (int(time.time() * 1000) % 1000000)
+    calls = [{"id": "call%s%d" % (stamp, i), "hash": "apihash%s%d" % (stamp, i)} for i in range(1, count + 1)]
+    print(json.dumps({"calls": calls, "requested": count, "token_invalid": False, "error": None}))
+
+
 def main():
+    if "vk-api" in ARGS:
+        vk_api()
+        return
     event("PROCESS", {"pid": os.getpid()})
     log("uid=%d gen=%d scenario=%s" % (os.getuid() if hasattr(os, "getuid") else 0, GENERATION, SCENARIO))
     log("argv: %s" % " ".join(sys.argv[1:]))
@@ -184,6 +217,10 @@ def main():
     event("READY", {"worker": 1})
     if SCENARIO == "wide":
         event("WORKERS", {"workers": 40})
+    if SCENARIO == "deadcalls" and GENERATION == 1:
+        time.sleep(0.5)
+        for hash in [h for h in ARGS.get("vk", "").split(",") if h]:
+            event("CALL_UNAVAILABLE", {"hash": hash, "code": 9000})
 
     started = time.time()
     ticks = 0

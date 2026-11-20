@@ -30,11 +30,11 @@ use serde_json::Value;
 use std::{
     io::IoSlice,
     os::fd::{AsRawFd, OwnedFd},
-    time::Duration,
 };
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
+    time::Duration,
 };
 use tokio::process::{Child, Command};
 
@@ -196,45 +196,174 @@ pub fn build_arguments(launch: &CoreLaunch<'_>, user_domains: Option<&Path>) -> 
 pub fn spawn(launch: &CoreLaunch<'_>) -> Result<Child> {
     let user_domains = write_user_domains(launch)?;
     let arguments = build_arguments(launch, user_domains.as_deref());
-    let mut command = Command::new(&launch.config.core_path);
+    let mut command = core_command(launch.config, launch.identity, launch.work_dir);
     command
         .args(&arguments)
-        .current_dir(launch.work_dir)
-        .env_clear()
         .env("CSQTT_EVENTS", "1")
         .env("CSQTT_PASSWORD", &launch.profile.password)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
+        .stderr(Stdio::piped());
+    command
+        .spawn()
+        .with_context(|| format!("запуск ядра {}", launch.config.core_path.display()))
+}
+
+/// Процесс ядра с чистым окружением от пользователя ядра: его трафик
+/// идёт мимо туннеля так же, как трафик самого ядра.
+fn core_command(config: &DaemonConfig, identity: CoreIdentity, work_dir: &Path) -> Command {
+    let mut command = Command::new(&config.core_path);
+    command.current_dir(work_dir).env_clear().kill_on_drop(true);
     #[cfg(unix)]
     {
-        command
-            .env("HOME", launch.work_dir)
-            .env("PATH", "/usr/bin:/bin");
+        command.env("HOME", work_dir).env("PATH", "/usr/bin:/bin");
         // Демон может работать без root только в тестах: тогда UID не меняем.
         if nix::unistd::geteuid().is_root() {
             // std сам обнуляет дополнительные группы при смене UID из-под root.
-            command.uid(launch.identity.uid).gid(launch.identity.gid);
+            command.uid(identity.uid).gid(identity.gid);
         }
     }
     #[cfg(windows)]
     {
+        let _ = identity;
         // Без SystemRoot процессы Windows не загружают системные библиотеки.
         let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
         let system32 = std::path::Path::new(&system_root).join("System32");
         command
             .env("SystemRoot", &system_root)
             .env("PATH", &system32)
-            .env("USERPROFILE", launch.work_dir)
-            .env("TEMP", launch.work_dir)
-            .env("TMP", launch.work_dir);
+            .env("USERPROFILE", work_dir)
+            .env("TEMP", work_dir)
+            .env("TMP", work_dir);
         // CREATE_NO_WINDOW: у службы нет консоли.
         command.creation_flags(0x0800_0000);
     }
     command
-        .spawn()
-        .with_context(|| format!("запуск ядра {}", launch.config.core_path.display()))
+}
+
+/// Звонок VK, созданный через API (режим Auto API).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VkCall {
+    pub id: String,
+    pub hash: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum VkCallsOutcome {
+    Created {
+        calls: Vec<VkCall>,
+        requested: usize,
+        /// Первая ошибка, если создались не все звонки.
+        error: Option<String>,
+    },
+    TokenInvalid(String),
+}
+
+/// Одноразовый запуск ядра в режиме API VK (`--vk-api=…`).
+pub struct VkApiRequest<'a> {
+    pub config: &'a DaemonConfig,
+    pub identity: CoreIdentity,
+    pub work_dir: &'a Path,
+    pub token: &'a str,
+    pub fingerprint: &'a str,
+    /// Физический интерфейс (macOS/Windows), как у самого ядра.
+    pub uplink: Option<&'a str>,
+}
+
+const VK_API_TIMEOUT: Duration = Duration::from_secs(60);
+
+impl VkApiRequest<'_> {
+    pub async fn start_calls(&self, count: usize) -> Result<VkCallsOutcome> {
+        let output = self
+            .run(&[
+                "--vk-api=start".to_owned(),
+                format!("--vk-api-count={count}"),
+            ])
+            .await?;
+        parse_vk_calls(&output)
+    }
+
+    /// Возвращает число завершённых звонков.
+    pub async fn finish_calls(&self, calls: &[VkCall]) -> Result<usize> {
+        let ids: Vec<&str> = calls.iter().map(|call| call.id.as_str()).collect();
+        let output = self
+            .run(&[
+                "--vk-api=finish".to_owned(),
+                format!("--vk-api-calls={}", ids.join(",")),
+            ])
+            .await?;
+        Ok(output.get("finished").and_then(Value::as_u64).unwrap_or(0) as usize)
+    }
+
+    async fn run(&self, action: &[String]) -> Result<Value> {
+        let mut command = core_command(self.config, self.identity, self.work_dir);
+        command
+            .args(action)
+            .arg(format!("--fingerprint={}", self.fingerprint))
+            .env("CSQTT_VK_TOKEN", self.token)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(uplink) = self.uplink {
+            command.arg(format!("--bind-interface={uplink}"));
+        }
+        let child = command
+            .spawn()
+            .with_context(|| format!("запуск ядра {}", self.config.core_path.display()))?;
+        let output = tokio::time::timeout(VK_API_TIMEOUT, child.wait_with_output())
+            .await
+            .context("ядро не ответило за минуту")?
+            .context("ожидание ядра")?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let line = stdout.lines().rev().find(|line| line.starts_with('{'));
+        match line {
+            Some(line) => serde_json::from_str(line).context("ответ ядра не JSON"),
+            None => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let reason = stderr.lines().rev().find(|line| !line.trim().is_empty());
+                bail!(
+                    "ядро не поддерживает Auto API или завершилось с ошибкой: {}",
+                    reason.unwrap_or("нет вывода")
+                )
+            }
+        }
+    }
+}
+
+fn parse_vk_calls(value: &Value) -> Result<VkCallsOutcome> {
+    let error = value
+        .get("error")
+        .and_then(Value::as_str)
+        .map(|error| error.chars().take(300).collect::<String>());
+    if value.get("token_invalid").and_then(Value::as_bool) == Some(true) {
+        return Ok(VkCallsOutcome::TokenInvalid(error.unwrap_or_default()));
+    }
+    let calls = value
+        .get("calls")
+        .and_then(Value::as_array)
+        .context("нет списка звонков в ответе ядра")?
+        .iter()
+        .filter_map(|call| {
+            let id = call.get("id")?.as_str()?;
+            let hash = call.get("hash")?.as_str()?;
+            let valid = |text: &str| {
+                !text.is_empty()
+                    && text.len() <= 128
+                    && text
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+            };
+            (valid(id) && valid(hash)).then(|| VkCall {
+                id: id.to_owned(),
+                hash: hash.to_owned(),
+            })
+        })
+        .collect();
+    Ok(VkCallsOutcome::Created {
+        calls,
+        requested: value.get("requested").and_then(Value::as_u64).unwrap_or(0) as usize,
+        error,
+    })
 }
 
 fn write_user_domains(launch: &CoreLaunch<'_>) -> Result<Option<PathBuf>> {
@@ -576,6 +705,37 @@ fn try_send_tun_fd(address: &UnixAddr, tun: &OwnedFd) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vk_calls_output_is_parsed_and_checked() {
+        let value = serde_json::json!({
+            "calls": [
+                {"id": "c1", "hash": "AbC_d-1"},
+                {"id": "c2", "hash": "bad hash"},
+                {"id": "", "hash": "x"}
+            ],
+            "requested": 3,
+            "token_invalid": false,
+            "error": "код 9: Flood control"
+        });
+        assert_eq!(
+            parse_vk_calls(&value).unwrap(),
+            VkCallsOutcome::Created {
+                calls: vec![VkCall {
+                    id: "c1".into(),
+                    hash: "AbC_d-1".into()
+                }],
+                requested: 3,
+                error: Some("код 9: Flood control".into()),
+            }
+        );
+        let invalid = serde_json::json!({"calls": [], "token_invalid": true, "error": "код 5"});
+        assert_eq!(
+            parse_vk_calls(&invalid).unwrap(),
+            VkCallsOutcome::TokenInvalid("код 5".into())
+        );
+        assert!(parse_vk_calls(&serde_json::json!({"finished": 1})).is_err());
+    }
 
     #[test]
     fn relay_mode_arguments() {

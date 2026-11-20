@@ -12,9 +12,7 @@ use csqtt_common::{
     profile::{ListMode, Profile, WORKERS_PER_GROUP},
     tunconf::{parse_server_routing, parse_tunconf, ServerRouting, TunConf},
 };
-use std::{
-    collections::BTreeSet, path::PathBuf, process::ExitStatus, sync::Arc, time::Duration,
-};
+use std::{collections::BTreeSet, path::PathBuf, process::ExitStatus, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader},
     process::ChildStdin,
@@ -50,6 +48,8 @@ enum Line {
 enum Exit {
     Stopped,
     Fatal(String),
+    /// Ядро не запускалось: не удалось подготовить запуск (звонки VK).
+    NotStarted(String),
     Restart {
         reason: String,
     },
@@ -77,6 +77,10 @@ struct Session {
     last_planned_restart: Option<Instant>,
     watcher: Watcher,
     diagnosis: Option<String>,
+    /// Звонки, созданные через API VK (режим Auto API).
+    api_calls: Vec<core::VkCall>,
+    /// Создать звонки заново перед следующим запуском ядра.
+    renew_calls: bool,
 }
 
 /// Одно «включение» ядра.
@@ -141,6 +145,8 @@ pub async fn start(shared: &Arc<Shared>, profile: Profile) -> Result<(), String>
         last_planned_restart: None,
         watcher: Watcher::new(&shared.config.interface),
         diagnosis: None,
+        api_calls: Vec::new(),
+        renew_calls: false,
     };
     let task = tokio::spawn(session.run(receiver));
     *slot = Some(SessionHandle { control, task });
@@ -251,6 +257,18 @@ impl Session {
                     shared.note(format!("перезапуск ядра: {reason}"));
                     Duration::from_secs(1)
                 }
+                Exit::NotStarted(reason) => {
+                    failures += 1;
+                    if !ever_connected
+                        && failures >= STARTUP_FAILURES_LIMIT
+                        && !self.profile.persistent
+                    {
+                        break Some(reason);
+                    }
+                    let delay = Duration::from_secs(1 << failures.min(5)).min(MAX_BACKOFF);
+                    shared.note(format!("{reason}; повтор через {} с", delay.as_secs()));
+                    delay
+                }
                 Exit::Died {
                     status,
                     uptime,
@@ -295,6 +313,7 @@ impl Session {
             }
         };
 
+        self.finish_api_calls().await;
         if let Some(mut network) = self.network.take() {
             tokio::task::block_in_place(|| network.teardown());
         }
@@ -325,6 +344,16 @@ impl Session {
             Ok(tun) => tun,
             Err(error) => return Exit::Fatal(error),
         };
+        if self.profile.api_hash_mode() && (self.api_calls.is_empty() || self.renew_calls) {
+            // Отключение не ждёт, пока VK ответит на все запросы.
+            let prepared = tokio::select! {
+                exit = self.create_api_calls(&tun) => exit,
+                _ = wait_for_stop(control) => Some(Exit::Stopped),
+            };
+            if let Some(exit) = prepared {
+                return exit;
+            }
+        }
         let launch = CoreLaunch {
             config: &shared.config,
             identity: shared.identity,
@@ -859,6 +888,104 @@ impl Session {
         }
     }
 
+    fn vk_api_request<'a>(&'a self, uplink: Option<&'a str>) -> core::VkApiRequest<'a> {
+        core::VkApiRequest {
+            config: &self.shared.config,
+            identity: self.shared.identity,
+            work_dir: &self.work_dir,
+            token: &self.profile.vk_token,
+            fingerprint: &self.profile.fingerprint,
+            uplink,
+        }
+    }
+
+    /// Auto API: звонки VK создаются до запуска ядра, ядро подключается к ним
+    /// по хешам, как в ручном режиме. `Some` — запускать ядро нельзя.
+    async fn create_api_calls(&mut self, tun: &core::CoreTun) -> Option<Exit> {
+        self.finish_api_calls().await;
+        self.renew_calls = false;
+        let uplink = match tun {
+            core::CoreTun::Relay { uplink, .. } => uplink.clone(),
+            core::CoreTun::Uds(_) => None,
+        };
+        let count = self.profile.api_call_count();
+        self.shared
+            .note(format!("создание звонков VK через API: {count}"));
+        let outcome = self
+            .vk_api_request(uplink.as_deref())
+            .start_calls(count)
+            .await;
+        match outcome {
+            Ok(core::VkCallsOutcome::Created {
+                calls,
+                requested,
+                error,
+            }) => {
+                if calls.is_empty() {
+                    return Some(Exit::NotStarted(format!(
+                        "не удалось создать звонки VK ({})",
+                        error.unwrap_or_else(|| "VK не вернул звонков".into())
+                    )));
+                }
+                if calls.len() < requested {
+                    self.shared.note(format!(
+                        "звонки VK созданы частично: {}/{requested} ({})",
+                        calls.len(),
+                        error.unwrap_or_default()
+                    ));
+                } else {
+                    self.shared
+                        .note(format!("звонки VK созданы: {}", calls.len()));
+                }
+                self.profile.hashes = calls.iter().map(|call| call.hash.clone()).collect();
+                self.api_calls = calls;
+                self.dead_hashes.clear();
+                self.shared
+                    .update_status(|status| status.dead_hashes.clear());
+                None
+            }
+            Ok(core::VkCallsOutcome::TokenInvalid(reason)) => Some(Exit::Fatal(format!(
+                "токен VK недействителен ({reason}): войди в VK заново в настройках профиля"
+            ))),
+            Err(error) => Some(Exit::NotStarted(format!(
+                "не удалось создать звонки VK: {error:#}"
+            ))),
+        }
+    }
+
+    /// Завершает звонки Auto API, чтобы они не висели в аккаунте.
+    async fn finish_api_calls(&mut self) {
+        if self.api_calls.is_empty() {
+            return;
+        }
+        let calls = std::mem::take(&mut self.api_calls);
+        let uplink = self.network_uplink().map(str::to_owned);
+        match self
+            .vk_api_request(uplink.as_deref())
+            .finish_calls(&calls)
+            .await
+        {
+            Ok(finished) => self
+                .shared
+                .note(format!("звонки VK завершены: {finished}/{}", calls.len())),
+            Err(error) => self
+                .shared
+                .note(format!("звонки VK не завершены: {error:#}")),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn network_uplink(&self) -> Option<&str> {
+        None
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn network_uplink(&self) -> Option<&str> {
+        self.network
+            .as_ref()
+            .and_then(|network| network.link().uplink.as_deref())
+    }
+
     async fn handle_dead_hash(&mut self, run: &mut Run, hash: String, code: i64) {
         if !self.dead_hashes.insert(hash.clone()) {
             return;
@@ -870,14 +997,20 @@ impl Session {
         let dead: Vec<String> = self.dead_hashes.iter().cloned().collect();
         self.shared
             .update_status(|status| status.dead_hashes = dead);
+        let all_dead = self
+            .profile
+            .hashes
+            .iter()
+            .all(|hash| self.dead_hashes.contains(hash));
+        if self.profile.api_hash_mode() && all_dead {
+            // Как на Android: вместо завершённых звонков создаются новые.
+            self.renew_calls = true;
+            run.planned_restart = Some("все звонки VK завершены, создаю новые".into());
+            run.send_stop(false).await;
+            return;
+        }
         let manual = !self.profile.js_hash_mode();
-        if manual
-            && self
-                .profile
-                .hashes
-                .iter()
-                .all(|hash| self.dead_hashes.contains(hash))
-        {
+        if manual && all_dead {
             run.fatal = Some(
                 "все хеши VK-звонков устарели: создай новый звонок и обнови hashes в профиле"
                     .to_owned(),

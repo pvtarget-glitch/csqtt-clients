@@ -109,7 +109,11 @@ fn unicast_row(index: u32, address: std::net::Ipv4Addr, prefix: u8) -> MIB_UNICA
 }
 
 /// Адрес на интерфейсе сразу в состоянии «предпочтительный» (без DAD).
-pub fn add_ipv4_address(index: u32, address: std::net::Ipv4Addr, prefix: u8) -> std::io::Result<()> {
+pub fn add_ipv4_address(
+    index: u32,
+    address: std::net::Ipv4Addr,
+    prefix: u8,
+) -> std::io::Result<()> {
     const ERROR_OBJECT_ALREADY_EXISTS: u32 = 5010;
     let row = unicast_row(index, address, prefix);
     // SAFETY: row заполнена, функция её только читает.

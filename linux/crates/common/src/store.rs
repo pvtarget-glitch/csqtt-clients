@@ -123,6 +123,10 @@ impl Store {
             merged.port = profile.port;
             merged.password = profile.password;
             merged.hashes = profile.hashes;
+            // Выбранный режим звонков сохраняется, если токен уже был.
+            if existing.vk_token.is_empty() {
+                merged.vk_hash_mode = profile.vk_hash_mode;
+            }
             merged.vk_token = profile.vk_token;
             profile = merged;
         }

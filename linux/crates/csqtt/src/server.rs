@@ -61,7 +61,7 @@ pub struct SshArgs {
 
 /// Чтение строки с консоли Windows без эха.
 #[cfg(windows)]
-fn read_secret(prompt: &str) -> Result<String> {
+pub fn read_secret(prompt: &str) -> Result<String> {
     const STD_INPUT_HANDLE: u32 = -10i32 as u32;
     const ENABLE_ECHO_INPUT: u32 = 0x0004;
     #[link(name = "kernel32")]
@@ -91,7 +91,7 @@ fn read_secret(prompt: &str) -> Result<String> {
 
 /// Чтение строки с терминала без эха.
 #[cfg(unix)]
-fn read_secret(prompt: &str) -> Result<String> {
+pub fn read_secret(prompt: &str) -> Result<String> {
     eprint!("{prompt}");
     std::io::stderr().flush().ok();
     let fd = libc::STDIN_FILENO;

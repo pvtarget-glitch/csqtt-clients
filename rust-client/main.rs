@@ -31,6 +31,7 @@ mod turn_core;
 mod turn_endpoint;
 mod turn_ip_pool;
 mod turn_stream;
+mod vk_api_calls;
 mod vk_js_calls;
 #[path = "../shared/wire_protocol.rs"]
 mod wire_protocol;
@@ -149,6 +150,13 @@ struct Arguments {
     direct_ips: String,
     #[arg(long = "exact-workers", default_value_t = false)]
     exact_workers: bool,
+    /// Одноразовый режим Auto API: `start` или `finish` (см. vk_api_calls).
+    #[arg(long = "vk-api", default_value = "")]
+    vk_api: String,
+    #[arg(long = "vk-api-count", default_value_t = 1)]
+    vk_api_count: usize,
+    #[arg(long = "vk-api-calls", default_value = "")]
+    vk_api_calls: String,
 }
 
 fn main() {
@@ -227,6 +235,15 @@ fn runtime_worker_threads_with_limit(
 
 async fn run(arguments: Arguments) -> Result<i32> {
     netbind::configure(&arguments.bind_interface)?;
+    if !arguments.vk_api.is_empty() {
+        return vk_api_calls::run(
+            &arguments.vk_api,
+            arguments.vk_api_count,
+            &arguments.vk_api_calls,
+            &arguments.fingerprint,
+        )
+        .await;
+    }
     if !arguments.listen_peer.is_empty() {
         let peer = arguments
             .listen_peer
@@ -609,6 +626,9 @@ fn normalize_cli_argument(argument: String) -> String {
         "runtime-threads",
         "workers",
         "exact-workers",
+        "vk-api",
+        "vk-api-count",
+        "vk-api-calls",
     ];
     let Some(rest) = argument.strip_prefix('-') else {
         return argument;

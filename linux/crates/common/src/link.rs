@@ -333,7 +333,7 @@ fn parse_link_token(raw: &str) -> Option<String> {
 
 /// Процентное декодирование; «+» остаётся плюсом (в ссылках им
 /// разделяются хеши, а не кодируется пробел).
-fn percent_decode(value: &str) -> Option<String> {
+pub fn percent_decode(value: &str) -> Option<String> {
     let bytes = value.as_bytes();
     let mut output = Vec::with_capacity(bytes.len());
     let mut index = 0;

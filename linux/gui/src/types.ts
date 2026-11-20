@@ -71,6 +71,8 @@ export interface Profile {
   password: string;
   hashes: string[];
   vk_token: string;
+  /** "auto_js" (по умолчанию) или "auto_api". */
+  vk_hash_mode?: string;
   workers: number;
   fingerprint: string;
   client_ids: string;

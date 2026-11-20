@@ -49,6 +49,16 @@ enum Command {
         #[arg(required = true)]
         hashes: Vec<String>,
     },
+    /// Войти в VK: звонки создаются автоматически по токену (Auto API).
+    /// Открой напечатанную ссылку в браузере, войди и вставь адрес страницы,
+    /// на которой окажешься (oauth.vk.ru/blank.html#access_token=…).
+    VkLogin {
+        /// Профиль (по умолчанию — профиль по умолчанию)
+        name: Option<String>,
+        /// Звонки создаёт ядро через аккаунт (Auto JS) вместо API VK
+        #[arg(long)]
+        js: bool,
+    },
     /// Выбрать профиль по умолчанию
     Default { name: String },
     /// Удалить профиль
@@ -142,6 +152,7 @@ fn run(command: Command) -> Result<()> {
         Command::Profiles => list_profiles(),
         Command::Show { name, secrets } => show(name.as_deref(), secrets),
         Command::Hashes { name, hashes } => set_hashes(&name, &hashes),
+        Command::VkLogin { name, js } => vk_login(name.as_deref(), js),
         Command::Default { name } => {
             let mut store = Store::load()?;
             store.resolve(Some(&name))?;
@@ -194,16 +205,16 @@ fn import(link: &str, name: Option<String>, make_default: bool) -> Result<()> {
     let profile = store
         .import_link(&name, &link)
         .map_err(anyhow::Error::msg)?;
-    let source = if profile.js_hash_mode() {
-        "VK-токен (Auto JS)".to_owned()
-    } else if profile.hashes.is_empty() {
-        "хешей нет".to_owned()
-    } else {
-        format!("хешей: {}", profile.hashes.len())
-    };
-    println!("Профиль «{name}»: {} · {source}", profile.peer());
-    if profile.hashes.is_empty() && !profile.js_hash_mode() {
-        println!("В ссылке нет хешей VK-звонков. Добавь их: csqtt hashes {name} <хеш или ссылка>…");
+    println!(
+        "Профиль «{name}»: {} · {}",
+        profile.peer(),
+        profile.vk_source()
+    );
+    if profile.hashes.is_empty() && profile.vk_token.is_empty() {
+        println!(
+            "В ссылке нет хешей VK-звонков. Добавь их: csqtt hashes {name} <хеш или ссылка>… \
+             или войди в VK: csqtt vk-login {name}"
+        );
     }
     if make_default {
         store.default = Some(name);
@@ -225,11 +236,7 @@ fn list_profiles() -> Result<()> {
         } else {
             " "
         };
-        let source = if profile.js_hash_mode() {
-            "VK-токен".to_owned()
-        } else {
-            format!("хешей: {}", profile.hashes.len())
-        };
+        let source = profile.vk_source();
         println!(
             "{mark} {:<20} {:<28} {source}",
             profile.name,
@@ -274,6 +281,46 @@ fn set_hashes(name: &str, hashes: &[String]) -> Result<()> {
     profile.vk_token.clear();
     let profile = profile.sanitize().map_err(anyhow::Error::msg)?;
     println!("Профиль «{name}»: хешей {}", profile.hashes.len());
+    store.upsert(profile);
+    store.save()?;
+    println!("Чтобы применить: csqtt down && csqtt up {name}");
+    Ok(())
+}
+
+fn vk_login(name: Option<&str>, js: bool) -> Result<()> {
+    use csqtt_common::vkauth::{self, Redirect};
+    let mut store = Store::load()?;
+    let mut profile = store.resolve(name)?.clone();
+    let name = profile.name.clone();
+    eprintln!("1. Открой в браузере:\n\n{}\n", vkauth::OAUTH_URL);
+    eprintln!("2. Войди в VK и разреши доступ.");
+    eprintln!(
+        "3. Скопируй адрес открывшейся страницы (oauth.vk.ru/blank.html#access_token=…) \
+         и вставь сюда. Ввод не отображается: в адресе токен."
+    );
+    let answer = server::read_secret("Адрес: ")?;
+    let token = match vkauth::parse_redirect(&answer) {
+        Some(Redirect::Token(token)) => token,
+        Some(Redirect::Error(message)) => bail!("VK отказал во входе: {message}"),
+        None => {
+            bail!("в адресе нет access_token — скопируй адрес целиком, вместе с частью после #")
+        }
+    };
+    if token.expires_in != 0 {
+        eprintln!(
+            "Внимание: VK выдал токен на {} ч, после этого вход придётся повторить. \
+             Обычно повторный вход по той же ссылке даёт бессрочный токен.",
+            token.expires_in / 3600
+        );
+    }
+    profile.vk_token = token.token;
+    profile.hashes.clear();
+    profile.vk_hash_mode = if js { "auto_js" } else { "auto_api" }.to_owned();
+    if !js && profile.vk_auth_mode == "auto_js" {
+        profile.vk_auth_mode = "vkcalls".to_owned();
+    }
+    let profile = profile.sanitize().map_err(anyhow::Error::msg)?;
+    println!("Профиль «{name}»: {}", profile.vk_source());
     store.upsert(profile);
     store.save()?;
     println!("Чтобы применить: csqtt down && csqtt up {name}");

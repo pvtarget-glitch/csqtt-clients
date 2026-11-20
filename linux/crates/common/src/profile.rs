@@ -37,6 +37,12 @@ fn default_captcha_mode() -> String {
 fn default_vk_auth_mode() -> String {
     "vkcalls".into()
 }
+fn default_vk_hash_mode() -> String {
+    "auto_js".into()
+}
+fn is_default_vk_hash_mode(value: &String) -> bool {
+    *value == default_vk_hash_mode()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -74,9 +80,17 @@ pub struct Profile {
     /// Хеши VK-звонков (ручной режим). Взаимоисключающе с `vk_token`.
     #[serde(default)]
     pub hashes: Vec<String>,
-    /// VK access token: ядро само создаёт звонки (режим Auto JS).
+    /// VK access token: звонки создаются автоматически (см. `vk_hash_mode`).
     #[serde(default)]
     pub vk_token: String,
+    /// Как создавать звонки по токену: `auto_js` — ядро само, через
+    /// аккаунт (Auto JS); `auto_api` — служба через API VK перед запуском
+    /// ядра, а подключается ядро к ним анонимно, как с хешами вручную.
+    #[serde(
+        default = "default_vk_hash_mode",
+        skip_serializing_if = "is_default_vk_hash_mode"
+    )]
+    pub vk_hash_mode: String,
     #[serde(default = "default_workers")]
     pub workers: u32,
     #[serde(default = "default_fingerprint")]
@@ -121,6 +135,12 @@ impl Profile {
             password: link.password.clone(),
             hashes: link.hashes.clone(),
             vk_token: link.vk_token.clone(),
+            // Как на Android: токен из ссылки создаёт звонки через API VK.
+            vk_hash_mode: if link.vk_token.is_empty() {
+                default_vk_hash_mode()
+            } else {
+                "auto_api".into()
+            },
             workers: default_workers(),
             fingerprint: default_fingerprint(),
             client_ids: default_client_ids(),
@@ -150,9 +170,34 @@ impl Profile {
         peer_address(&self.host, self.port)
     }
 
-    /// Ядро само получает хеши по токену.
+    /// Ядро само получает хеши по токену (Auto JS).
     pub fn js_hash_mode(&self) -> bool {
-        !self.vk_token.is_empty()
+        !self.vk_token.is_empty() && self.vk_hash_mode != "auto_api"
+    }
+
+    /// Звонки по токену создаёт служба через API VK (Auto API).
+    pub fn api_hash_mode(&self) -> bool {
+        !self.vk_token.is_empty() && self.vk_hash_mode == "auto_api"
+    }
+
+    /// Откуда берутся звонки: для списков и сообщений.
+    pub fn vk_source(&self) -> String {
+        if self.api_hash_mode() {
+            "VK-токен (Auto API)".to_owned()
+        } else if self.js_hash_mode() {
+            "VK-токен (Auto JS)".to_owned()
+        } else if self.hashes.is_empty() {
+            "хешей нет".to_owned()
+        } else {
+            format!("хешей: {}", self.hashes.len())
+        }
+    }
+
+    /// Сколько звонков создать в режиме Auto API: по одному на 10 потоков.
+    pub fn api_call_count(&self) -> usize {
+        (self.normalized_workers() as usize)
+            .div_ceil(10)
+            .clamp(1, MAX_VK_HASHES)
     }
 
     /// Число воркеров так, как его округлит ядро (кратно 10, минимум 5).
@@ -243,8 +288,12 @@ impl Profile {
             &self.vk_auth_mode,
             &["vkcalls", "legacy", "auto_js"],
         )?;
+        one_of("vk_hash_mode", &self.vk_hash_mode, &["auto_js", "auto_api"])?;
         if self.vk_auth_mode == "auto_js" && !self.js_hash_mode() {
-            return Err("vk_auth_mode = \"auto_js\" работает только с vk_token".into());
+            return Err(
+                "vk_auth_mode = \"auto_js\" работает только с vk_token и vk_hash_mode = \"auto_js\""
+                    .into(),
+            );
         }
         if !self
             .client_ids
@@ -380,6 +429,51 @@ mod tests {
                 vk_token: String::new(),
             },
         )
+    }
+
+    #[test]
+    fn link_token_uses_auto_api_and_old_profiles_keep_auto_js() {
+        let link = CsqttLink {
+            host: "203.0.113.7".into(),
+            port: 46000,
+            password: "SecretPass123456".into(),
+            hashes: Vec::new(),
+            vk_token: "vk1.a.token".into(),
+        };
+        let profile = Profile::from_link("t", &link).sanitize().unwrap();
+        assert!(profile.api_hash_mode() && !profile.js_hash_mode());
+        assert!(toml::to_string(&profile)
+            .unwrap()
+            .contains("vk_hash_mode = \"auto_api\""));
+
+        let mut old = profile.clone();
+        old.vk_hash_mode = "auto_js".into();
+        let text = toml::to_string(&old).unwrap();
+        assert!(
+            !text.contains("vk_hash_mode"),
+            "режим по умолчанию не пишется"
+        );
+        let parsed: Profile = toml::from_str(&text).unwrap();
+        assert!(parsed.js_hash_mode());
+
+        let mut wrong = profile.clone();
+        wrong.vk_auth_mode = "auto_js".into();
+        assert!(
+            wrong.sanitize().is_err(),
+            "Auto JS-вход несовместим с Auto API"
+        );
+        let mut wrong = profile;
+        wrong.vk_hash_mode = "manual".into();
+        assert!(wrong.sanitize().is_err());
+    }
+
+    #[test]
+    fn api_call_count_follows_workers() {
+        let mut profile = sample();
+        for (workers, calls) in [(5, 1), (10, 1), (30, 3), (100, 6)] {
+            profile.workers = workers;
+            assert_eq!(profile.api_call_count(), calls, "{workers}");
+        }
     }
 
     #[test]

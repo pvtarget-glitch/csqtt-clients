@@ -437,7 +437,7 @@ dependencies = [
 
 [[package]]
 name = "csqtt-client"
-version = "2.5.0+linux.3"
+version = "2.5.0+linux.4"
 dependencies = [
  "aes",
  "anyhow",

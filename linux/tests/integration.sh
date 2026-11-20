@@ -161,6 +161,23 @@ EOF
 for scenario in ok captcha fatal crash restart routing tunlost wide silent; do profile "$scenario" "$scenario"; done
 profile persistent crash "persistent = true"
 profile selected ok "selected_apps_only = true"
+api_profile() { # api_profile имя сценарий токен
+  cat >> "$WORK/config/profiles.toml" <<EOF
+[[profile]]
+name = "$1"
+host = "203.0.113.7"
+port = 46000
+password = "$2"
+vk_token = "$3"
+vk_hash_mode = "auto_api"
+workers = 30
+
+EOF
+}
+api_profile api ok vk1.a.apitoken
+api_profile apidead deadcalls vk1.a.apitoken
+api_profile apibad ok vk1.invalid
+api_profile apiempty ok vk1.empty
 
 cat > "$WORK/captcha-stub" <<'EOF'
 #!/bin/sh
@@ -396,6 +413,54 @@ sleep 1
 check "число потоков от сервера" test "$(field workers_target)" = 40
 csqtt down >/dev/null
 absent "новая сессия начинает журнал заново" "scenario=wide" "$(csqtt up tunlost >/dev/null 2>&1; core_log)"
+csqtt down >/dev/null
+
+# --- Auto API ----------------------------------------------------------------
+echo "== Auto API: звонки создаёт служба через API VK"
+VKAPI_LOG="$WORK/run/core/vk-api.log"
+rm -f "$VKAPI_LOG"
+csqtt up api >/dev/null 2>&1
+wait_state connected 10
+check "подключено с Auto API" test "$(state)" = connected
+LOG="$(core_log)"
+contains "звонки созданы до запуска ядра" "звонки VK созданы: 3" "$LOG"
+contains "ядро получило хеши звонков" "--vk=apihash" "$LOG"
+contains "ядро в ручном режиме хешей" "--vk-hash-mode=manual" "$LOG"
+absent "токен не попал в аргументы ядра" "vk1.a.apitoken" "$LOG"
+VKAPI="$(cat "$VKAPI_LOG" 2>/dev/null)"
+contains "звонков по одному на 10 потоков" "start count=3" "$VKAPI"
+contains "токен передан через окружение" "token=yes" "$VKAPI"
+contains "токена нет в argv" "argv_token=no" "$VKAPI"
+contains "API VK вызывается от пользователя ядра" "uid=$(id -u "$CORE_USER")" "$VKAPI"
+csqtt down >/dev/null
+contains "звонки завершены при отключении" "звонки VK завершены: 3/3" "$(core_log)"
+contains "завершены именно созданные звонки" "finish count= calls=call" "$(cat "$VKAPI_LOG")"
+
+echo "== Auto API: завершённые звонки заменяются новыми"
+rm -f "$VKAPI_LOG"
+csqtt up apidead >/dev/null 2>&1
+wait_state connected 10
+sleep 3
+LOG="$(core_log)"
+contains "служба создаёт новые звонки" "все звонки VK завершены, создаю новые" "$LOG"
+check "звонки создавались дважды" test "$(grep -c '^start' "$VKAPI_LOG")" = 2
+check "старые звонки завершены перед созданием новых" test "$(grep -c '^finish' "$VKAPI_LOG")" = 1
+contains "ядро перезапущено с новыми хешами" "gen=2" "$LOG"
+check "после замены — подключено" test "$(state)" = connected
+csqtt down >/dev/null
+
+echo "== Auto API: недействительный токен"
+csqtt up apibad >/dev/null 2>&1
+wait_state failed 10
+check "сессия завершилась ошибкой" test "$(state)" = failed
+contains "понятная ошибка про вход" "токен VK недействителен" "$(field last_error)"
+absent "ядро не запускалось" "ядро запущено" "$(core_log)"
+csqtt down >/dev/null
+
+echo "== Auto API: VK не создаёт звонков"
+csqtt up apiempty >/dev/null 2>&1
+wait_state failed 20
+contains "после трёх попыток — ошибка с причиной от VK" "Flood control" "$(field last_error)"
 csqtt down >/dev/null
 
 echo "== потеря TUN"

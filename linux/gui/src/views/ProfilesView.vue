@@ -11,7 +11,9 @@ const deploying = ref(false);
 const busy = ref(false);
 
 function source(profile: Profile): string {
-  if (profile.vk_token) return "VK-токен";
+  if (profile.vk_token) {
+    return profile.vk_hash_mode === "auto_api" ? "вход в VK, Auto API" : "вход в VK, Auto JS";
+  }
   const count = profile.hashes.length;
   if (count === 0) return "хешей нет";
   const mod10 = count % 10;
