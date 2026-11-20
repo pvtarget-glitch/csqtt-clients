@@ -266,7 +266,7 @@ async function copyLink() {
         <div class="pair">
           <label class="field">
             <span>Потоков (10–100, шаг 10)</span>
-            <input v-model="draft.workers" class="input" type="number" min="5" max="100" step="10" />
+            <input v-model="draft.workers" class="input" type="number" min="5" max="100" />
             <span v-if="workersEffective !== Number(draft.workers)" class="quiet small">
               Потоки идут группами по 10: будет {{ workersEffective }}
             </span>
