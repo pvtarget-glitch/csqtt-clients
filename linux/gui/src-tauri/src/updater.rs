@@ -146,11 +146,14 @@ pub fn spawn_background(app: AppHandle, enabled: impl Fn() -> bool + Send + 'sta
     });
 }
 
-/// Открывает страницу выпуска в браузере. Только адреса выпусков этого
-/// репозитория: команда доступна странице окна, лишнего она открыть не должна.
+/// Открывает в браузере страницу репозитория или выпуска. Только адреса
+/// этого репозитория: команда доступна странице окна, лишнего она открыть
+/// не должна.
 #[tauri::command]
 pub fn open_release_page(url: String) -> Result<(), String> {
-    let allowed = url.starts_with(&format!("{}/", update::RELEASES_URL))
+    let allowed = (url == update::REPOSITORY_URL
+        || url == update::RELEASES_URL
+        || url.starts_with(&format!("{}/", update::RELEASES_URL)))
         && !url.contains(['"', '\'', ' ', '\\', '\n', '&', '|', ';', '<', '>', '^']);
     if !allowed {
         return Err("эту ссылку окно не открывает".into());

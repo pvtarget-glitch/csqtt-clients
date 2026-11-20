@@ -14,6 +14,7 @@ use std::{
 };
 
 pub const REPOSITORY: &str = "pvtarget-glitch/csqtt-clients";
+pub const REPOSITORY_URL: &str = "https://github.com/pvtarget-glitch/csqtt-clients";
 pub const RELEASES_URL: &str = "https://github.com/pvtarget-glitch/csqtt-clients/releases";
 const LATEST_API: &str =
     "https://api.github.com/repos/pvtarget-glitch/csqtt-clients/releases/latest";

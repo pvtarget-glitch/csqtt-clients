@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { app, checkUpdate, fail, notify } from "../store";
+import { app, checkUpdate, fail, notify, openReleasePage } from "../store";
+
+const REPOSITORY_URL = "https://github.com/pvtarget-glitch/csqtt-clients";
 import type { AppInfo, Settings } from "../types";
 
 const settings = reactive<Settings>({
@@ -101,8 +103,12 @@ async function save() {
         </div>
         <p v-if="updateNote" class="quiet small">{{ updateNote }}</p>
         <p class="quiet small">
-          Обновления скачиваются со страницы выпусков на GitHub, перед установкой проверяется
-          контрольная сумма. Для установки система спросит пароль администратора.
+          Обновления скачиваются из репозитория
+          <button class="link" type="button" @click="openReleasePage(REPOSITORY_URL)">
+            github.com/pvtarget-glitch/csqtt-clients
+          </button>
+          (раздел Releases), перед установкой проверяется контрольная сумма. Для установки
+          система спросит пароль администратора.
         </p>
       </section>
 
