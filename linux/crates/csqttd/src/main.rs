@@ -25,6 +25,8 @@ mod server;
 mod session;
 mod state;
 mod watch;
+#[cfg(windows)]
+mod wfp;
 
 use anyhow::{bail, Context, Result};
 use config::DaemonConfig;

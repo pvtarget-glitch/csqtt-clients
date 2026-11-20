@@ -20,10 +20,10 @@ use windows_service::{
 use windows_sys::Win32::{
     Foundation::{LocalFree, HANDLE},
     NetworkManagement::IpHelper::{
-        CreateUnicastIpAddressEntry, DeleteUnicastIpAddressEntry, GetBestInterface,
-        InitializeUnicastIpAddressEntry, MIB_UNICASTIPADDRESS_ROW,
+        CreateUnicastIpAddressEntry, DeleteUnicastIpAddressEntry, GetBestInterface, GetBestRoute2,
+        InitializeUnicastIpAddressEntry, MIB_IPFORWARD_ROW2, MIB_UNICASTIPADDRESS_ROW,
     },
-    Networking::WinSock::{IpDadStatePreferred, AF_INET},
+    Networking::WinSock::{IpDadStatePreferred, AF_INET, SOCKADDR_INET},
     Security::{
         Authorization::{ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1},
         PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
@@ -92,6 +92,36 @@ pub fn best_interface_index() -> Option<u32> {
     // SAFETY: функция пишет только в index.
     let status = unsafe { GetBestInterface(destination, &mut index) };
     (status == 0 && index != 0).then_some(index)
+}
+
+/// Шлюз маршрута в интернет через интерфейс `index`. Маршруты туннеля
+/// (0/1, 128/1) идут через другой интерфейс и в выбор не попадают.
+/// `0.0.0.0` — маршрут без шлюза (интерфейс «точка-точка»).
+pub fn gateway_via(index: u32) -> Option<std::net::Ipv4Addr> {
+    // SAFETY: C-структуры, все нули допустимы; функция пишет только в row
+    // и source.
+    unsafe {
+        let mut destination: SOCKADDR_INET = std::mem::zeroed();
+        destination.Ipv4.sin_family = AF_INET;
+        destination.Ipv4.sin_addr.S_un.S_addr = u32::from_ne_bytes([1, 1, 1, 1]);
+        let mut row: MIB_IPFORWARD_ROW2 = std::mem::zeroed();
+        let mut source: SOCKADDR_INET = std::mem::zeroed();
+        let status = GetBestRoute2(
+            std::ptr::null(),
+            index,
+            std::ptr::null(),
+            &destination,
+            0,
+            &mut row,
+            &mut source,
+        );
+        if status != 0 || row.NextHop.si_family != AF_INET {
+            return None;
+        }
+        Some(std::net::Ipv4Addr::from(
+            row.NextHop.Ipv4.sin_addr.S_un.S_addr.to_ne_bytes(),
+        ))
+    }
 }
 
 /// Строка адреса IPv4 для IP Helper.

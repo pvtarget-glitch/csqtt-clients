@@ -196,7 +196,7 @@ pub fn build_arguments(launch: &CoreLaunch<'_>, user_domains: Option<&Path>) -> 
 pub fn spawn(launch: &CoreLaunch<'_>) -> Result<Child> {
     let user_domains = write_user_domains(launch)?;
     let arguments = build_arguments(launch, user_domains.as_deref());
-    let mut command = core_command(launch.config, launch.identity, launch.work_dir);
+    let mut command = core_command(&launch.config.core_path, launch.identity, launch.work_dir);
     command
         .args(&arguments)
         .env("CSQTT_EVENTS", "1")
@@ -211,8 +211,8 @@ pub fn spawn(launch: &CoreLaunch<'_>) -> Result<Child> {
 
 /// Процесс ядра с чистым окружением от пользователя ядра: его трафик
 /// идёт мимо туннеля так же, как трафик самого ядра.
-fn core_command(config: &DaemonConfig, identity: CoreIdentity, work_dir: &Path) -> Command {
-    let mut command = Command::new(&config.core_path);
+fn core_command(core_path: &Path, identity: CoreIdentity, work_dir: &Path) -> Command {
+    let mut command = Command::new(core_path);
     command.current_dir(work_dir).env_clear().kill_on_drop(true);
     #[cfg(unix)]
     {
@@ -260,19 +260,21 @@ pub enum VkCallsOutcome {
 }
 
 /// Одноразовый запуск ядра в режиме API VK (`--vk-api=…`).
-pub struct VkApiRequest<'a> {
-    pub config: &'a DaemonConfig,
+/// Данные свои, а не заимствованные: запрос можно отдать фоновой задаче.
+#[derive(Clone)]
+pub struct VkApiRequest {
+    pub core_path: PathBuf,
     pub identity: CoreIdentity,
-    pub work_dir: &'a Path,
-    pub token: &'a str,
-    pub fingerprint: &'a str,
+    pub work_dir: PathBuf,
+    pub token: String,
+    pub fingerprint: String,
     /// Физический интерфейс (macOS/Windows), как у самого ядра.
-    pub uplink: Option<&'a str>,
+    pub uplink: Option<String>,
 }
 
 const VK_API_TIMEOUT: Duration = Duration::from_secs(60);
 
-impl VkApiRequest<'_> {
+impl VkApiRequest {
     pub async fn start_calls(&self, count: usize) -> Result<VkCallsOutcome> {
         let output = self
             .run(&[
@@ -296,20 +298,20 @@ impl VkApiRequest<'_> {
     }
 
     async fn run(&self, action: &[String]) -> Result<Value> {
-        let mut command = core_command(self.config, self.identity, self.work_dir);
+        let mut command = core_command(&self.core_path, self.identity, &self.work_dir);
         command
             .args(action)
             .arg(format!("--fingerprint={}", self.fingerprint))
-            .env("CSQTT_VK_TOKEN", self.token)
+            .env("CSQTT_VK_TOKEN", &self.token)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        if let Some(uplink) = self.uplink {
+        if let Some(uplink) = &self.uplink {
             command.arg(format!("--bind-interface={uplink}"));
         }
         let child = command
             .spawn()
-            .with_context(|| format!("запуск ядра {}", self.config.core_path.display()))?;
+            .with_context(|| format!("запуск ядра {}", self.core_path.display()))?;
         let output = tokio::time::timeout(VK_API_TIMEOUT, child.wait_with_output())
             .await
             .context("ядро не ответило за минуту")?

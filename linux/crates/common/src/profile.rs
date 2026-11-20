@@ -370,6 +370,22 @@ pub fn parse_ipv4_net(text: &str) -> Option<(Ipv4Addr, u8)> {
     Some((Ipv4Addr::from(u32::from(address) & mask), prefix))
 }
 
+/// Сети в каноническом виде `a.b.c.d/N` для маршрутов: без повторов,
+/// без неразборчивых строк и без /0 (это был бы весь трафик).
+pub fn canonical_ipv4_nets(networks: &[String]) -> Vec<String> {
+    let mut prefixes: Vec<(Ipv4Addr, u8)> = networks
+        .iter()
+        .filter_map(|text| parse_ipv4_net(text))
+        .filter(|(_, prefix)| *prefix > 0)
+        .collect();
+    prefixes.sort();
+    prefixes.dedup();
+    prefixes
+        .into_iter()
+        .map(|(network, prefix)| format!("{network}/{prefix}"))
+        .collect()
+}
+
 fn is_name_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '-' | '_' | '.')
 }
@@ -429,6 +445,18 @@ mod tests {
                 vk_token: String::new(),
             },
         )
+    }
+
+    #[test]
+    fn canonical_nets_for_routes() {
+        let nets: Vec<String> = ["10.1.2.3/8", "192.0.2.5", "10.0.0.0/8", "0.0.0.0/0", "bad"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(
+            canonical_ipv4_nets(&nets),
+            vec!["10.0.0.0/8", "192.0.2.5/32"]
+        );
     }
 
     #[test]

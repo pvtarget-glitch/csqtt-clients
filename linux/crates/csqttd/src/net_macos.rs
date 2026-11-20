@@ -69,7 +69,33 @@ pub struct Network {
     routes_installed: bool,
     ipv6_blocked: bool,
     dns_applied: Option<Vec<Ipv4Addr>>,
+    /// Сети мимо туннеля и маршрут, через который они поставлены.
+    direct: Vec<(String, DirectVia)>,
     tasks: Vec<JoinHandle<()>>,
+}
+
+/// Куда направлена сеть мимо туннеля: шлюз или интерфейс без шлюза.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DirectVia {
+    Gateway(Ipv4Addr),
+    Interface(String),
+}
+
+impl DirectVia {
+    fn route_arguments<'a>(&'a self, action: &'a str, net: &'a str) -> Vec<String> {
+        let mut arguments: Vec<String> = ["-q", "-n", action, "-net", net]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        match self {
+            Self::Gateway(gateway) => arguments.push(gateway.to_string()),
+            Self::Interface(interface) => {
+                arguments.push("-interface".to_owned());
+                arguments.push(interface.clone());
+            }
+        }
+        arguments
+    }
 }
 
 impl Network {
@@ -108,6 +134,7 @@ impl Network {
             routes_installed: false,
             ipv6_blocked: false,
             dns_applied: None,
+            direct: Vec::new(),
             tasks,
         })
     }
@@ -199,16 +226,46 @@ impl Network {
         Ok(notes)
     }
 
-    /// Сети мимо туннеля: на macOS — маршруты через шлюз физического
-    /// интерфейса. Пока не поддерживается.
+    /// Сети мимо туннеля: маршруты через шлюз физического интерфейса.
+    /// Они точнее маршрутов 0/1 и 128/1 туннеля, поэтому выигрывают.
     pub fn set_direct_networks(&mut self, networks: &[String]) -> Result<()> {
-        if networks.is_empty() {
+        self.remove_direct();
+        if self.params.mode == Mode::Interface || networks.is_empty() {
             return Ok(());
         }
-        bail!("исключения по IP на macOS пока не поддерживаются")
+        let uplink = crate::watch::current_uplink(&self.utun_name)
+            .ok_or_else(|| anyhow!("нет физического интерфейса с маршрутом по умолчанию"))?;
+        let via = if uplink.gateway.is_unspecified() {
+            DirectVia::Interface(uplink.interface)
+        } else {
+            DirectVia::Gateway(uplink.gateway)
+        };
+        let wanted = csqtt_common::profile::canonical_ipv4_nets(networks);
+        let mut failed = Vec::new();
+        for net in wanted {
+            let arguments = via.route_arguments("add", &net);
+            let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+            match run("route", &arguments) {
+                Ok(()) => self.direct.push((net, via.clone())),
+                Err(error) => failed.push(format!("{net}: {error:#}")),
+            }
+        }
+        if !failed.is_empty() {
+            bail!("{}", failed.join("; "));
+        }
+        Ok(())
+    }
+
+    fn remove_direct(&mut self) {
+        for (net, via) in std::mem::take(&mut self.direct) {
+            let arguments = via.route_arguments("delete", &net);
+            let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+            let _ = run("route", &arguments);
+        }
     }
 
     pub fn teardown(&mut self) {
+        self.remove_direct();
         if self.dns_applied.take().is_some() {
             restore_dns();
         }

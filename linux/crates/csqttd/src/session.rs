@@ -345,12 +345,7 @@ impl Session {
             Err(error) => return Exit::Fatal(error),
         };
         if self.profile.api_hash_mode() && (self.api_calls.is_empty() || self.renew_calls) {
-            // Отключение не ждёт, пока VK ответит на все запросы.
-            let prepared = tokio::select! {
-                exit = self.create_api_calls(&tun) => exit,
-                _ = wait_for_stop(control) => Some(Exit::Stopped),
-            };
-            if let Some(exit) = prepared {
+            if let Some(exit) = self.create_api_calls(&tun, control).await {
                 return exit;
             }
         }
@@ -888,20 +883,24 @@ impl Session {
         }
     }
 
-    fn vk_api_request<'a>(&'a self, uplink: Option<&'a str>) -> core::VkApiRequest<'a> {
+    fn vk_api_request(&self, uplink: Option<String>) -> core::VkApiRequest {
         core::VkApiRequest {
-            config: &self.shared.config,
+            core_path: self.shared.config.core_path.clone(),
             identity: self.shared.identity,
-            work_dir: &self.work_dir,
-            token: &self.profile.vk_token,
-            fingerprint: &self.profile.fingerprint,
+            work_dir: self.work_dir.clone(),
+            token: self.profile.vk_token.clone(),
+            fingerprint: self.profile.fingerprint.clone(),
             uplink,
         }
     }
 
     /// Auto API: звонки VK создаются до запуска ядра, ядро подключается к ним
     /// по хешам, как в ручном режиме. `Some` — запускать ядро нельзя.
-    async fn create_api_calls(&mut self, tun: &core::CoreTun) -> Option<Exit> {
+    async fn create_api_calls(
+        &mut self,
+        tun: &core::CoreTun,
+        control: &mut mpsc::Receiver<Control>,
+    ) -> Option<Exit> {
         self.finish_api_calls().await;
         self.renew_calls = false;
         let uplink = match tun {
@@ -911,10 +910,28 @@ impl Session {
         let count = self.profile.api_call_count();
         self.shared
             .note(format!("создание звонков VK через API: {count}"));
-        let outcome = self
-            .vk_api_request(uplink.as_deref())
-            .start_calls(count)
-            .await;
+        let request = self.vk_api_request(uplink);
+        let finisher = request.clone();
+        let mut creating = tokio::spawn(async move { request.start_calls(count).await });
+        let outcome = tokio::select! {
+            joined = &mut creating => match joined {
+                Ok(outcome) => outcome,
+                Err(error) => Err(anyhow::anyhow!("задача создания звонков: {error}")),
+            },
+            _ = wait_for_stop(control) => {
+                // Отключение не ждёт VK, но созданное к этому моменту не
+                // бросается: создание доходит до конца в фоне, а звонки
+                // сразу завершаются, чтобы не висеть в аккаунте.
+                tokio::spawn(async move {
+                    if let Ok(Ok(core::VkCallsOutcome::Created { calls, .. })) = creating.await {
+                        if !calls.is_empty() {
+                            let _ = finisher.finish_calls(&calls).await;
+                        }
+                    }
+                });
+                return Some(Exit::Stopped);
+            }
+        };
         match outcome {
             Ok(core::VkCallsOutcome::Created {
                 calls,
@@ -960,11 +977,7 @@ impl Session {
         }
         let calls = std::mem::take(&mut self.api_calls);
         let uplink = self.network_uplink().map(str::to_owned);
-        match self
-            .vk_api_request(uplink.as_deref())
-            .finish_calls(&calls)
-            .await
-        {
+        match self.vk_api_request(uplink).finish_calls(&calls).await {
             Ok(finished) => self
                 .shared
                 .note(format!("звонки VK завершены: {finished}/{}", calls.len())),

@@ -178,6 +178,7 @@ api_profile api ok vk1.a.apitoken
 api_profile apidead deadcalls vk1.a.apitoken
 api_profile apibad ok vk1.invalid
 api_profile apiempty ok vk1.empty
+api_profile apislow ok vk1.slow
 
 cat > "$WORK/captcha-stub" <<'EOF'
 #!/bin/sh
@@ -448,6 +449,18 @@ check "старые звонки завершены перед создание�
 contains "ядро перезапущено с новыми хешами" "gen=2" "$LOG"
 check "после замены — подключено" test "$(state)" = connected
 csqtt down >/dev/null
+
+echo "== Auto API: отключение во время создания звонков"
+rm -f "$VKAPI_LOG"
+csqtt up apislow >/dev/null 2>&1 &
+UP_PID=$!
+sleep 1
+csqtt down >/dev/null
+wait "$UP_PID"
+check "отключение не ждёт VK" test "$(state)" != connected
+sleep 4
+contains "созданные после отмены звонки завершены" "finish count= calls=call" "$(cat "$VKAPI_LOG" 2>/dev/null)"
+absent "ядро не запускалось" "ядро запущено" "$(core_log)"
 
 echo "== Auto API: недействительный токен"
 csqtt up apibad >/dev/null 2>&1

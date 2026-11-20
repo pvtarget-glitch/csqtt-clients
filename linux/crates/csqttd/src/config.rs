@@ -70,6 +70,9 @@ pub struct DaemonConfig {
     /// cgroup для приложений через туннель (`csqtt tunnel`) в профилях
     /// «только выбранные программы».
     pub tunnel_cgroup: String,
+    /// Windows: пока туннель включён, трафик мимо него блокируется
+    /// фильтрами WFP. На других системах не используется.
+    pub kill_switch: bool,
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
@@ -141,6 +144,7 @@ impl Default for DaemonConfig {
             cgroup_root: "/sys/fs/cgroup".into(),
             bypass_cgroup: "csqtt-direct".into(),
             tunnel_cgroup: "csqtt-tunnel".into(),
+            kill_switch: true,
         }
     }
 }

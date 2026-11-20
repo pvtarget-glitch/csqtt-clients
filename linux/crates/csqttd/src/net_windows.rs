@@ -38,6 +38,8 @@ pub struct NetParams {
     pub wintun_dll: PathBuf,
     /// На Windows не используется; поле для общего кода.
     pub selected_only: bool,
+    pub kill_switch: bool,
+    pub core_path: PathBuf,
 }
 
 impl NetParams {
@@ -53,6 +55,8 @@ impl NetParams {
                 .map(|dir| dir.join("wintun.dll"))
                 .unwrap_or_else(|| PathBuf::from("wintun.dll")),
             selected_only: false,
+            kill_switch: config.kill_switch,
+            core_path: config.core_path.clone(),
         }
     }
 }
@@ -74,6 +78,10 @@ pub struct Network {
     address: Option<Ipv4Addr>,
     routes_installed: bool,
     dns_applied: Option<Vec<Ipv4Addr>>,
+    /// Сети мимо туннеля: (сеть, интерфейс, шлюз).
+    direct: Vec<(String, u32, Ipv4Addr)>,
+    /// Блокировка трафика мимо туннеля (WFP), пока туннель включён.
+    kill_switch: Option<crate::wfp::KillSwitch>,
     stop: Arc<AtomicBool>,
     threads: Vec<std::thread::JoinHandle<()>>,
 }
@@ -153,6 +161,8 @@ impl Network {
             address: None,
             routes_installed: false,
             dns_applied: None,
+            direct: Vec::new(),
+            kill_switch: None,
             stop,
             threads,
         })
@@ -278,14 +288,99 @@ impl Network {
         Ok(notes)
     }
 
+    /// Сети мимо туннеля: маршруты через шлюз физического интерфейса.
+    /// Они точнее маршрутов 0/1 и 128/1 туннеля, поэтому выигрывают.
     pub fn set_direct_networks(&mut self, networks: &[String]) -> Result<()> {
-        if networks.is_empty() {
+        // Блокировка пересобирается под новый список исключений. Ошибка
+        // блокировки не мешает туннелю, но о ней сообщается.
+        let kill_switch = self.update_kill_switch(networks);
+        let routes = self.set_direct_routes(networks);
+        match (kill_switch, routes) {
+            (Ok(()), result) => result,
+            (Err(error), Ok(())) => Err(error),
+            (Err(first), Err(second)) => bail!("{first:#}; {second:#}"),
+        }
+    }
+
+    fn update_kill_switch(&mut self, networks: &[String]) -> Result<()> {
+        if !self.params.kill_switch || self.params.mode == Mode::Interface || !self.routes_installed
+        {
+            self.kill_switch = None;
             return Ok(());
         }
-        bail!("исключения по IP на Windows пока не поддерживаются")
+        let direct: Vec<(Ipv4Addr, u8)> = csqtt_common::profile::canonical_ipv4_nets(networks)
+            .iter()
+            .filter_map(|net| csqtt_common::profile::parse_ipv4_net(net))
+            .collect();
+        // SAFETY: NET_LUID_LH — объединение, Value покрывает его целиком.
+        let tunnel_luid = unsafe { self.adapter.get_luid().Value };
+        // Новый набор фильтров ставится до снятия старого: окна без защиты нет.
+        let enabled = crate::wfp::enable(&crate::wfp::Rules {
+            tunnel_luid,
+            core_path: &self.params.core_path,
+            direct: &direct,
+        })
+        .context("блокировка трафика мимо туннеля (WFP) не включена")?;
+        self.kill_switch = Some(enabled);
+        Ok(())
+    }
+
+    fn set_direct_routes(&mut self, networks: &[String]) -> Result<()> {
+        self.remove_direct();
+        if self.params.mode == Mode::Interface || networks.is_empty() {
+            return Ok(());
+        }
+        let uplink: u32 = self
+            .link
+            .uplink
+            .as_deref()
+            .and_then(|index| index.parse().ok())
+            .ok_or_else(|| anyhow!("нет физического интерфейса с маршрутом в интернет"))?;
+        let gateway = crate::platform::gateway_via(uplink)
+            .ok_or_else(|| anyhow!("нет шлюза у интерфейса {uplink}"))?;
+        let mut failed = Vec::new();
+        for net in csqtt_common::profile::canonical_ipv4_nets(networks) {
+            let result = netsh(&[
+                "interface",
+                "ipv4",
+                "add",
+                "route",
+                &format!("prefix={net}"),
+                &format!("interface={uplink}"),
+                &format!("nexthop={gateway}"),
+                "metric=0",
+                "store=active",
+            ]);
+            match result {
+                Ok(()) => self.direct.push((net, uplink, gateway)),
+                Err(error) => failed.push(format!("{net}: {error:#}")),
+            }
+        }
+        if !failed.is_empty() {
+            bail!("{}", failed.join("; "));
+        }
+        Ok(())
+    }
+
+    fn remove_direct(&mut self) {
+        for (net, uplink, gateway) in std::mem::take(&mut self.direct) {
+            let _ = netsh(&[
+                "interface",
+                "ipv4",
+                "delete",
+                "route",
+                &format!("prefix={net}"),
+                &format!("interface={uplink}"),
+                &format!("nexthop={gateway}"),
+                "store=active",
+            ]);
+        }
     }
 
     pub fn teardown(&mut self) {
+        // Сначала маршруты и DNS, потом блокировка: так при отключении
+        // ничего не успевает уйти мимо.
+        self.remove_direct();
         self.stop.store(true, Ordering::Relaxed);
         let _ = self.session.shutdown();
         for thread in self.threads.drain(..) {
@@ -321,6 +416,7 @@ impl Network {
         if let Some(address) = self.address.take() {
             let _ = crate::platform::delete_ipv4_address(self.index, address);
         }
+        self.kill_switch = None;
         let _ = &self.adapter;
     }
 }

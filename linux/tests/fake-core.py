@@ -11,7 +11,8 @@ ok, captcha, fatal, crash, restart, routing, tunlost, wide (сервер наз�
 
 Одноразовый режим Auto API (--vk-api=start|finish) отвечает строкой JSON,
 как настоящее ядро, и пишет вызовы в vk-api.log в рабочем каталоге. Токен
-vk1.invalid — «токен недействителен», vk1.empty — VK не создаёт звонков.
+vk1.invalid — «токен недействителен», vk1.empty — VK не создаёт звонков,
+vk1.slow — звонки создаются 3 секунды.
 """
 import array
 import base64
@@ -159,6 +160,8 @@ def vk_api():
         print(json.dumps({"calls": [], "requested": 1, "token_invalid": True, "error": "код 5: User authorization failed"}))
         return
     count = int(ARGS.get("vk-api-count", "1"))
+    if token == "vk1.slow":
+        time.sleep(3)
     if token == "vk1.empty":
         print(json.dumps({"calls": [], "requested": count, "token_invalid": False, "error": "код 9: Flood control"}))
         return

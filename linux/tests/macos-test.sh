@@ -49,6 +49,10 @@ host = "203.0.113.7"
 port = 46000
 password = "ok"
 hashes = ["abcdefghijklmnop1"]
+
+[profile.routing]
+ip_mode = "blacklist"
+ips = ["192.0.2.0/24"]
 EOF
 
 "$BIN/csqttd" --config "$WORK/csqttd.toml" > "$WORK/daemon.log" 2>&1 &
@@ -66,6 +70,7 @@ contains "интерфейс utun в статусе" "utun" "$UTUN"
 contains "адрес туннеля на utun" "10.99.0.2" "$(ifconfig "$UTUN" 2>&1)"
 contains "маршрут в туннель" "interface: $UTUN" "$(route -n get 198.51.100.77 2>&1)"
 contains "локальный маршрут по умолчанию не тронут" "interface: $UPLINK" "$(route -n get default 2>&1)"
+contains "исключение по IP идёт мимо туннеля" "interface: $UPLINK" "$(route -n get 192.0.2.10 2>&1)"
 LOG="$(csqtt logs -n 0)"
 contains "ядро в UDP-режиме" "--listen-peer=127.0.0.1:" "$LOG"
 contains "ядро привязано к физическому интерфейсу" "--bind-interface=$UPLINK" "$LOG"
@@ -80,6 +85,7 @@ echo "== отключение"
 csqtt down > /dev/null 2>&1
 for _ in $(seq 1 30); do [ "$(field state)" = disconnected ] && break; sleep 0.2; done
 absent "маршрут в туннель снят" "interface: $UTUN" "$(route -n get 198.51.100.77 2>&1)"
+absent "маршрут исключения снят" "destination: 192.0.2.0" "$(route -n get 192.0.2.10 2>&1)"
 absent "utun удалён" "10.99.0.2" "$(ifconfig 2>&1)"
 [ "$(scutil --dns | grep 'nameserver\[' | sort -u)" = "$DNS_BEFORE" ] && ok "DNS восстановлен" || bad "DNS восстановлен" "$(scutil --dns | grep nameserver)"
 
