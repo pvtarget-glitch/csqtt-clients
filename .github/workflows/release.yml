@@ -173,7 +173,8 @@ jobs:
             [ -z "$missing" ] || { echo "нет библиотек: $missing"; exit 1; }
             getent passwd csqtt-core
             getent group csqtt
-            grep -q "ExecStart=$(command -v csqttd)" /usr/lib/systemd/system/csqttd.service
+            exec_path="$(sed -n "s/^ExecStart=\([^ ]*\).*/\1/p" /usr/lib/systemd/system/csqttd.service)"
+            [ -x "$exec_path" ] || { echo "ExecStart указывает на $exec_path, а его нет"; exit 1; }
             echo "пакет ставится и запускается"
           '
 
