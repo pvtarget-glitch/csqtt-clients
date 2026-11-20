@@ -60,9 +60,9 @@ BASE_TCP="$(probe tcp 1.1.1.1)"
 BASE_DNS="$(probe dns 8.8.8.8)"
 echo "физический интерфейс $UPLINK; до подключения: tcp $BASE_TCP, dns $BASE_DNS"
 wfp_filters() {
-  (cd "$WORK_UNIX" && netsh wfp show filters file=filters.xml > /dev/null 2>&1)
   local count
   rm -f "$WORK_UNIX/filters.xml"
+  (cd "$WORK_UNIX" && netsh wfp show filters file=filters.xml > /dev/null 2>&1)
   count="$(grep -c '<name>csqtt</name>' "$WORK_UNIX/filters.xml" 2>/dev/null)"
   echo "${count:-0}"
 }
