@@ -1,4 +1,4 @@
-name: Build & Release (Linux)
+name: Build & Release
 
 # Сборка .deb Linux-клиента из папки linux/ и, по желанию, релиз.
 # Описание релиза берётся из .github/release-notes/<версия>.md.
