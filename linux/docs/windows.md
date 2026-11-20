@@ -4,7 +4,7 @@
 
 ## Установка
 
-1. Скачай `csqtt-windows-…-x64-setup.exe` из [Releases](https://github.com/pvtarget-glitch/csqtt-linux/releases).
+1. Скачай `csqtt-windows-…-x64-setup.exe` из [Releases](https://github.com/pvtarget-glitch/csqtt-clients/releases).
 2. Установщик не подписан, поэтому SmartScreen покажет «Windows защитила ваш компьютер». Нажми «Подробнее» → «Выполнить в любом случае».
 3. Установщик спросит права администратора. Он кладёт программу в `C:\Program Files\csqtt`, ставит и запускает службу `csqttd` (автозапуск, от имени LocalSystem) и драйвер [Wintun](https://www.wintun.net) от авторов WireGuard.
 4. Запусти csqtt из меню «Пуск».

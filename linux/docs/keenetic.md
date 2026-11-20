@@ -20,7 +20,7 @@
 
 ## Установка
 
-Архив `csqtt-router-…-aarch64.tar.gz` лежит в разделе [Releases](https://github.com/pvtarget-glitch/csqtt-linux/releases) репозитория. Скопируй его на роутер. SSH в Entware обычно слушает порт 222:
+Архив `csqtt-router-…-aarch64.tar.gz` лежит в разделе [Releases](https://github.com/pvtarget-glitch/csqtt-clients/releases) репозитория. Скопируй его на роутер. SSH в Entware обычно слушает порт 222:
 
 ```sh
 scp -P 222 csqtt-router-*-aarch64.tar.gz root@192.168.1.1:/opt/tmp/

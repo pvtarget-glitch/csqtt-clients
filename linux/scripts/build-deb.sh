@@ -76,7 +76,7 @@ Priority: optional
 Installed-Size: ${SIZE}
 Depends: libc6 (>= ${GLIBC}), libgcc-s1, iproute2, libwebkit2gtk-4.1-0, libgtk-3-0, libayatana-appindicator3-1
 Recommends: nftables, python3, python3-gi, gir1.2-gtk-3.0, gir1.2-webkit2-4.1, libnotify-bin
-Homepage: https://github.com/pvtarget-glitch/csqtt-linux
+Homepage: https://github.com/pvtarget-glitch/csqtt-clients
 Description: Linux client for the csqtt tunnel
  Daemon (csqttd), desktop window (csqtt-gui), command-line tool (csqtt)
  and manual captcha window for the csqtt TURN/RTP tunnel. Runs the csqtt core

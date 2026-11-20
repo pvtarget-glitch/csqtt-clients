@@ -1,10 +1,10 @@
-# csqtt-linux
+# csqtt-clients
 
-Linux-клиент туннеля [CSQTT](https://github.com/amurcanov/csqtt): системная служба, окно управления и утилита командной строки.
+Клиенты туннеля [CSQTT](https://github.com/amurcanov/csqtt) для Linux, macOS, Windows и роутеров Keenetic: системная служба, окно управления и утилита командной строки. Основная платформа — Linux, ниже описана она. Версии для [macOS](docs/macos.md), [Windows](docs/windows.md) и [роутера](docs/keenetic.md) описаны отдельно.
 
 ![Окно csqtt: подключено, 28 потоков из 40](docs/window.png)
 
-Клиент лежит в папке `linux/` форка [amurcanov/csqtt](https://github.com/amurcanov/csqtt). Ядро — `rust-client` из корня форка — запускается отдельным процессом, так же как его запускает Android-приложение. Этот проект делает то, что на Android делает Kotlin-часть: TUN-интерфейс, маршруты, DNS, перезапуски и показ капчи. Доработки ядра в этом форке описаны в разделе «Ядро в этом форке».
+Клиенты лежат в папке `linux/` форка [amurcanov/csqtt](https://github.com/amurcanov/csqtt). Ядро — `rust-client` из корня форка — запускается отдельным процессом, так же как его запускает Android-приложение. Этот проект делает то, что на Android делает Kotlin-часть: TUN-интерфейс, маршруты, DNS, перезапуски и показ капчи. Доработки ядра в этом форке описаны в разделе «Ядро в этом форке».
 
 Окно (Tauri 2 + Vue 3) и команда `csqtt` — два равноправных клиента одного сокета демона: серверы общие, туннель переживает закрытие окна.
 
@@ -28,7 +28,7 @@ Linux-клиент туннеля [CSQTT](https://github.com/amurcanov/csqtt): �
 
 ## Установка (Ubuntu / Debian / Mint)
 
-Готовый пакет — в разделе [Releases](https://github.com/pvtarget-glitch/csqtt-linux/releases).
+Готовый пакет — в разделе [Releases](https://github.com/pvtarget-glitch/csqtt-clients/releases).
 
 ```bash
 sudo apt install ./csqtt-linux_0.8.0+core2.5.0+linux.3_amd64.deb
@@ -42,8 +42,8 @@ sudo apt install ./csqtt-linux_0.8.0+core2.5.0+linux.3_amd64.deb
 sudo apt install build-essential cmake git pkg-config nodejs npm \
   libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
 # Rust: https://rustup.rs (ядру нужен 1.97.1 или новее); Node.js — 20 или новее
-git clone https://github.com/pvtarget-glitch/csqtt-linux.git
-cd csqtt-linux/linux
+git clone https://github.com/pvtarget-glitch/csqtt-clients.git
+cd csqtt-clients/linux
 scripts/build-deb.sh          # соберёт ядро, демон, окно, CLI и dist/*.deb
 sudo apt install ./dist/csqtt-linux_*.deb
 ```
