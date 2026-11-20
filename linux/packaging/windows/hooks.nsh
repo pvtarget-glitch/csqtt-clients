@@ -11,7 +11,9 @@
 !macroend
 
 !macro NSIS_HOOK_PREINSTALL
-  ; Обновление: старая служба держит файлы — останавливаем её.
+  ; Обновление: старая служба и окно держат файлы — останавливаем их.
+  ; Туннель при этом отключается, служба после установки запускается снова.
   nsExec::ExecToLog 'sc.exe stop csqttd'
+  nsExec::ExecToLog 'taskkill.exe /F /IM csqtt-gui.exe'
   Sleep 2000
 !macroend

@@ -93,6 +93,18 @@ export interface Settings {
   start_minimized: boolean;
   autostart: boolean;
   tray_available: boolean;
+  auto_update_check: boolean;
+}
+
+export interface UpdateInfo {
+  current: string;
+  latest: string;
+  available: boolean;
+  page: string;
+  notes: string;
+  /** "deb" | "rpm" | "pacman" | "mac_pkg" | "windows_setup" | "manual" */
+  install: string;
+  asset: { name: string; url: string; size: number } | null;
 }
 
 export interface AppInfo {

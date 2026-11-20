@@ -100,6 +100,7 @@ pub fn idle_status() -> Status {
         dead_hashes: Vec::new(),
         captcha: None,
         captcha_handlers: 0,
+        captcha_proxy: None,
     }
 }
 

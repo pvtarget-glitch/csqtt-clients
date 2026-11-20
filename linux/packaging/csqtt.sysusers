@@ -1,0 +1,3 @@
+# Группа управления туннелем и пользователь ядра csqtt (systemd-sysusers).
+g csqtt -
+u csqtt-core - "csqtt tunnel core" /nonexistent /usr/sbin/nologin

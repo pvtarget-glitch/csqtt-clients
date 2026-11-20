@@ -1,0 +1,31 @@
+# Пользователи создаёт хук systemd-sysusers по /usr/lib/sysusers.d/csqtt.conf.
+_add_user_to_group() {
+    for user in "${SUDO_USER:-}" "$(id -nu "${PKEXEC_UID:-x}" 2>/dev/null)"; do
+        if [ -n "$user" ] && [ "$user" != root ] && id "$user" >/dev/null 2>&1; then
+            id -nG "$user" | tr ' ' '\n' | grep -qx csqtt || usermod -aG csqtt "$user" || true
+        fi
+    done
+}
+
+post_install() {
+    _add_user_to_group
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        systemctl enable --now csqttd.service >/dev/null 2>&1 || true
+    fi
+    echo "csqtt: чтобы управлять туннелем, добавь себя в группу: sudo usermod -aG csqtt \$USER"
+}
+
+post_upgrade() {
+    _add_user_to_group
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        systemctl try-restart csqttd.service >/dev/null 2>&1 || true
+    fi
+}
+
+pre_remove() {
+    if [ -d /run/systemd/system ]; then
+        systemctl disable --now csqttd.service >/dev/null 2>&1 || true
+    fi
+}

@@ -126,7 +126,10 @@ pub fn solve(app: &AppHandle, request: &CaptchaRequest) -> Result<String, String
     let label = format!("captcha-{}", NEXT.fetch_add(1, Ordering::Relaxed));
     let (sender, receiver) = mpsc::channel::<Outcome>();
     let navigation_sender = sender.clone();
-    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
+    let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url));
+    // Мимо туннеля, как ядро: VK видит проверку и решение с одного адреса.
+    let (builder, data_dir) = crate::webview_proxy::apply(builder, request.proxy.as_deref());
+    let window = builder
         .title("Проверка VK — csqtt")
         .inner_size(480.0, 680.0)
         .initialization_script_for_all_frames(HOOK_JS)
@@ -166,6 +169,7 @@ pub fn solve(app: &AppHandle, request: &CaptchaRequest) -> Result<String, String
     if let Some(window) = app.get_webview_window(&label) {
         let _ = window.destroy();
     }
+    crate::webview_proxy::drop_later(data_dir);
     result
 }
 

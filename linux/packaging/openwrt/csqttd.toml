@@ -1,0 +1,19 @@
+# csqttd на роутере с OpenWrt.
+#
+# Режим «interface»: служба поднимает интерфейс csqtt0 и больше ничего не
+# трогает — ни маршруты, ни DNS, ни брандмауэр. Что направить в туннель,
+# решаешь ты: политикой маршрутизации (пакет pbr), правилами Mihomo/Xray
+# или своими правилами ip rule. Примеры — в README.md из архива.
+mode = "interface"
+interface = "csqtt0"
+mtu = 1500
+
+# В режиме interface ядро может работать от root: его трафик не попадает в
+# туннель, пока ты сам не направишь в csqtt0 весь трафик роутера.
+core_user = "root"
+core_path = "/usr/lib/csqtt/csqtt-core"
+domains_template = "/usr/share/csqtt/domains.txt"
+
+socket_path = "/var/run/csqtt/csqttd.sock"
+runtime_dir = "/var/run/csqtt"
+log_lines = 2000

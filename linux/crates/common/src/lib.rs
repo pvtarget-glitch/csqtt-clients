@@ -9,6 +9,7 @@ pub mod link;
 pub mod profile;
 pub mod store;
 pub mod tunconf;
+pub mod update;
 pub mod vkauth;
 
 /// Сокет управления демоном.

@@ -11,7 +11,9 @@ mod captcha_window;
 mod daemon;
 mod server;
 mod settings;
+mod updater;
 mod vk_login_window;
+mod webview_proxy;
 
 use csqtt_common::{
     client::socket_path,
@@ -338,6 +340,12 @@ struct SettingsView {
     autostart: bool,
     #[serde(default)]
     tray_available: bool,
+    #[serde(default = "enabled")]
+    auto_update_check: bool,
+}
+
+fn enabled() -> bool {
+    true
 }
 
 #[tauri::command]
@@ -346,6 +354,7 @@ fn get_settings(state: tauri::State<'_, AppState>) -> SettingsView {
     SettingsView {
         close_to_tray: settings.close_to_tray,
         start_minimized: settings.start_minimized,
+        auto_update_check: settings.auto_update_check,
         autostart: settings::autostart_enabled(),
         tray_available: state.tray_available(),
     }
@@ -356,6 +365,7 @@ fn save_settings(state: tauri::State<'_, AppState>, settings: SettingsView) -> R
     let updated = GuiSettings {
         close_to_tray: settings.close_to_tray,
         start_minimized: settings.start_minimized,
+        auto_update_check: settings.auto_update_check,
     };
     updated.save()?;
     *lock(&state.settings) = updated;
@@ -400,6 +410,7 @@ fn main() {
         ))
         .manage(state)
         .manage(server::DeployState::default())
+        .manage(updater::Updater::default())
         .invoke_handler(tauri::generate_handler![
             snapshot,
             fetch_logs,
@@ -422,9 +433,17 @@ fn main() {
             deploy_remove,
             deploy_cancel,
             vk_login,
+            updater::update_check,
+            updater::update_install,
+            updater::restart_app,
+            updater::open_release_page,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
+            let checker = handle.clone();
+            updater::spawn_background(handle.clone(), move || {
+                lock(&checker.state::<AppState>().settings).auto_update_check
+            });
             // Отладочная проверка встроенного окна капчи на странице-заглушке
             // (tests/captcha_fixture.py): печатает результат и завершает окно.
             #[cfg(debug_assertions)]
@@ -436,6 +455,7 @@ fn main() {
                         url,
                         timeout_secs: 20,
                         mode: "selected".into(),
+                        proxy: std::env::var("CSQTT_CAPTCHA_SELFTEST_PROXY").ok(),
                     };
                     let result = captcha_window::solve(&selftest, &request);
                     eprintln!("CAPTCHA_SELFTEST {result:?}");

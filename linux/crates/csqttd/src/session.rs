@@ -349,6 +349,13 @@ impl Session {
                 return exit;
             }
         }
+        // Прокси для окна проверки VK: на роутере окна нет.
+        let captcha_proxy = (shared.config.mode != crate::config::Mode::Interface)
+            .then(free_tcp_port)
+            .flatten();
+        shared.update_status(|status| {
+            status.captcha_proxy = captcha_proxy.map(|port| format!("127.0.0.1:{port}"));
+        });
         let launch = CoreLaunch {
             config: &shared.config,
             identity: shared.identity,
@@ -357,6 +364,7 @@ impl Session {
             salt: &salt,
             tun: &tun,
             work_dir: &self.work_dir,
+            captcha_proxy,
         };
         let mut child = match core::spawn(&launch) {
             Ok(child) => child,
@@ -1055,6 +1063,7 @@ impl Session {
             mode: mode.to_owned(),
             url,
             timeout_secs,
+            proxy: self.shared.status().captcha_proxy,
         };
         run.captcha = Some(PendingCaptcha {
             id: request.id,
@@ -1175,4 +1184,12 @@ fn server_silent_message(port: u16) -> String {
          Проверь, что сервер запущен, UDP-порт {port} открыт на сервере и у хостера, \
          пароль в профиле совпадает с паролем сервера, а IP сервера не заблокирован."
     )
+}
+
+/// Свободный TCP-порт на 127.0.0.1 (для прокси ядра).
+fn free_tcp_port() -> Option<u16> {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|listener| listener.local_addr())
+        .map(|address| address.port())
+        .ok()
 }

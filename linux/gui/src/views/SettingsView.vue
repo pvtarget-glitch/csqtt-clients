@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { app, fail, notify } from "../store";
+import { app, checkUpdate, fail, notify } from "../store";
 import type { AppInfo, Settings } from "../types";
 
 const settings = reactive<Settings>({
@@ -9,7 +9,25 @@ const settings = reactive<Settings>({
   start_minimized: true,
   autostart: false,
   tray_available: false,
+  auto_update_check: true,
 });
+const checking = ref(false);
+const updateNote = ref("");
+
+async function checkNow() {
+  checking.value = true;
+  updateNote.value = "";
+  try {
+    const info = await checkUpdate();
+    updateNote.value = info.available
+      ? `Доступна версия ${info.latest} — кнопка «Обновить» вверху окна.`
+      : `Установлена последняя версия ${info.current}.`;
+  } catch (error) {
+    updateNote.value = `Не удалось проверить: ${error}`;
+  } finally {
+    checking.value = false;
+  }
+}
 const info = ref<AppInfo | null>(null);
 const loaded = ref(false);
 
@@ -67,6 +85,24 @@ async function save() {
         <p class="quiet small">
           Туннель держит системная служба, поэтому закрытие окна его не разрывает. Но окно
           проверки VK показывает только запущенное приложение.
+        </p>
+      </section>
+
+      <section class="block">
+        <h1 class="title">Обновления</h1>
+        <label class="check">
+          <input v-model="settings.auto_update_check" type="checkbox" @change="save" />
+          <span>Проверять обновления автоматически</span>
+        </label>
+        <div>
+          <button class="button" type="button" :disabled="checking" @click="checkNow">
+            {{ checking ? "Проверяю…" : "Проверить обновления" }}
+          </button>
+        </div>
+        <p v-if="updateNote" class="quiet small">{{ updateNote }}</p>
+        <p class="quiet small">
+          Обновления скачиваются со страницы выпусков на GitHub, перед установкой проверяется
+          контрольная сумма. Для установки система спросит пароль администратора.
         </p>
       </section>
 

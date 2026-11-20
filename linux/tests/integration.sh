@@ -302,7 +302,10 @@ LOG="$(core_log)"
 contains "авто-WebView сразу отклонён" "captcha result: error:auto webview is not available on linux" "$LOG"
 contains "чужой адрес капчи отклонён" "captcha result: error:invalid captcha request" "$LOG"
 contains "токен ручной капчи передан ядру" "captcha result: tok_stub_42" "$LOG"
-contains "окну передан адрес VK" "--url https://id.vk.ru/not_robot_captcha?session_token=abc --timeout 55" "$(cat "$WORK/captcha-args" 2>/dev/null)"
+CAPTCHA_ARGS="$(cat "$WORK/captcha-args" 2>/dev/null)"
+contains "окну передан адрес VK" "--url https://id.vk.ru/not_robot_captcha?session_token=abc --timeout 55" "$CAPTCHA_ARGS"
+contains "окну передан прокси ядра (мимо туннеля)" "--proxy 127.0.0.1:" "$CAPTCHA_ARGS"
+contains "ядро запущено с прокси для окна проверки" "--captcha-proxy=127.0.0.1:" "$LOG"
 check "капча закрыта в статусе" test "$(field captcha)" = None
 csqtt down >/dev/null
 

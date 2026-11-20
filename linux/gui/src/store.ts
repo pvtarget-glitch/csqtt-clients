@@ -1,7 +1,7 @@
 import { reactive } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { DaemonEvent, LogLine, Profile, Status } from "./types";
+import type { DaemonEvent, LogLine, Profile, Status, UpdateInfo } from "./types";
 
 const MAX_LOG_LINES = 6000;
 
@@ -22,7 +22,41 @@ export const app = reactive({
   pending: false,
   notice: "",
   error: "",
+  /** Найденное обновление, пока его не скрыли. */
+  update: null as UpdateInfo | null,
+  /** "" | "download" | "install" | "restart" — ход установки. */
+  updateStage: "",
 });
+
+export async function checkUpdate(): Promise<UpdateInfo> {
+  const info = await invoke<UpdateInfo>("update_check");
+  app.update = info.available ? info : null;
+  return info;
+}
+
+export async function installUpdate() {
+  app.error = "";
+  app.updateStage = "download";
+  try {
+    const result = await invoke<string>("update_install");
+    app.updateStage = result === "restart" ? "restart" : "install";
+  } catch (error) {
+    app.updateStage = "";
+    fail(error);
+  }
+}
+
+export async function openReleasePage(url: string) {
+  try {
+    await invoke("open_release_page", { url });
+  } catch (error) {
+    fail(error);
+  }
+}
+
+export async function restartApp() {
+  await invoke("restart_app");
+}
 
 let noticeTimer: number | undefined;
 
@@ -101,6 +135,12 @@ export async function init() {
     }
   });
   await listen<DaemonEvent>("daemon-event", (event) => applyEvent(event.payload));
+  await listen<UpdateInfo>("update-available", (event) => {
+    if (!app.updateStage) app.update = event.payload;
+  });
+  await listen<string>("update-progress", (event) => {
+    app.updateStage = event.payload;
+  });
   await Promise.all([refresh(), loadProfiles().catch(fail)]);
 }
 

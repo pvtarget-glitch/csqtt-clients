@@ -6,6 +6,7 @@ import ProfilesView from "./views/ProfilesView.vue";
 import LogView from "./views/LogView.vue";
 import AppsView from "./views/AppsView.vue";
 import SettingsView from "./views/SettingsView.vue";
+import UpdateBanner from "./components/UpdateBanner.vue";
 
 // «Настройки» — значком справа: при крупном системном шрифте и узком окне
 // текстовые вкладки прокручиваются, а настройки остаются видны всегда.
@@ -102,6 +103,7 @@ onMounted(() => void init());
         </svg>
       </button>
     </nav>
+    <UpdateBanner />
     <TunnelView v-if="app.view === 'tunnel'" />
     <ProfilesView v-else-if="app.view === 'profiles'" />
     <AppsView v-else-if="app.view === 'apps'" />

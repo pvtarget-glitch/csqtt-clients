@@ -49,6 +49,15 @@ enum Command {
         #[arg(required = true)]
         hashes: Vec<String>,
     },
+    /// Проверить обновления и установить новую версию
+    Update {
+        /// Только проверить, ничего не скачивать
+        #[arg(long)]
+        check: bool,
+        /// Не спрашивать подтверждение
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
     /// Войти в VK: звонки создаются автоматически по токену (Auto API).
     /// Открой напечатанную ссылку в браузере, войди и вставь адрес страницы,
     /// на которой окажешься (oauth.vk.ru/blank.html#access_token=…).
@@ -153,6 +162,7 @@ fn run(command: Command) -> Result<()> {
         Command::Show { name, secrets } => show(name.as_deref(), secrets),
         Command::Hashes { name, hashes } => set_hashes(&name, &hashes),
         Command::VkLogin { name, js } => vk_login(name.as_deref(), js),
+        Command::Update { check, yes } => update(check, yes),
         Command::Default { name } => {
             let mut store = Store::load()?;
             store.resolve(Some(&name))?;
@@ -324,6 +334,60 @@ fn vk_login(name: Option<&str>, js: bool) -> Result<()> {
     store.upsert(profile);
     store.save()?;
     println!("Чтобы применить: csqtt down && csqtt up {name}");
+    Ok(())
+}
+
+fn update(check_only: bool, yes: bool) -> Result<()> {
+    use csqtt_common::update::{self, Install};
+    let binary = std::env::current_exe().unwrap_or_default();
+    let info = update::check(env!("CARGO_PKG_VERSION"), &binary).map_err(anyhow::Error::msg)?;
+    if !info.available {
+        println!("Установлена последняя версия: {}", info.current);
+        return Ok(());
+    }
+    println!(
+        "Доступна версия {} (установлена {})",
+        info.latest, info.current
+    );
+    println!("Что нового: {}", info.page);
+    if check_only {
+        return Ok(());
+    }
+    let Some(asset) = info.asset.as_ref() else {
+        match info.install {
+            Install::Manual => println!(
+                "Эта установка обновляется вручную (роутер или сборка из исходников): \
+                 скачай файл со страницы выпуска."
+            ),
+            _ => println!("В выпуске нет файла для этой системы: скачай со страницы выпуска."),
+        }
+        return Ok(());
+    };
+    if !yes {
+        if !std::io::stdin().is_terminal() {
+            bail!("подтверди установку: csqtt update --yes");
+        }
+        eprint!("Скачать и установить {}? [y/N] ", asset.name);
+        std::io::stderr().flush().ok();
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !matches!(answer.trim(), "y" | "Y" | "д" | "Д" | "yes" | "да") {
+            println!("Отменено.");
+            return Ok(());
+        }
+    }
+    let dir = update::download_dir().map_err(anyhow::Error::msg)?;
+    println!("Скачиваю {}…", asset.name);
+    let file = update::download(&info, &dir).map_err(anyhow::Error::msg)?;
+    println!("Контрольная сумма совпала. Устанавливаю…");
+    let mut command = update::install_command(info.install, &file, cfg!(windows))
+        .context("эта установка обновляется вручную")?;
+    let status = command.status().context("запуск установки")?;
+    let _ = std::fs::remove_dir_all(&dir);
+    if !status.success() {
+        bail!("установка завершилась с ошибкой ({status})");
+    }
+    println!("Готово: установлена версия {}.", info.latest);
     Ok(())
 }
 

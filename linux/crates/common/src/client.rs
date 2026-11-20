@@ -14,6 +14,8 @@ type Stream = std::fs::File;
 
 /// Сокет на роутере с Entware: `/run` там нет, всё живёт под `/opt`.
 pub const ENTWARE_SOCKET_PATH: &str = "/opt/var/run/csqtt/csqttd.sock";
+/// Сокет на OpenWrt: /var/run там ссылка на /tmp/run.
+pub const OPENWRT_SOCKET_PATH: &str = "/var/run/csqtt/csqttd.sock";
 
 #[cfg(windows)]
 pub fn socket_path() -> PathBuf {
@@ -29,12 +31,15 @@ pub fn socket_path() -> PathBuf {
         return PathBuf::from(path);
     }
     let standard = PathBuf::from(crate::SOCKET_PATH);
-    let entware = PathBuf::from(ENTWARE_SOCKET_PATH);
-    if !standard.exists() && entware.exists() {
-        entware
-    } else {
-        standard
+    if standard.exists() {
+        return standard;
     }
+    // Роутеры: Entware (Keenetic) и OpenWrt, где /run может не быть.
+    [ENTWARE_SOCKET_PATH, OPENWRT_SOCKET_PATH]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| path.exists())
+        .unwrap_or(standard)
 }
 
 #[cfg(target_os = "macos")]

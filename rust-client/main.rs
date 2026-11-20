@@ -31,6 +31,7 @@ mod turn_core;
 mod turn_endpoint;
 mod turn_ip_pool;
 mod turn_stream;
+mod captcha_proxy;
 mod vk_api_calls;
 mod vk_js_calls;
 #[path = "../shared/wire_protocol.rs"]
@@ -157,6 +158,9 @@ struct Arguments {
     vk_api_count: usize,
     #[arg(long = "vk-api-calls", default_value = "")]
     vk_api_calls: String,
+    /// HTTPS-прокси к доменам VK для окна проверки на хосте (127.0.0.1:порт).
+    #[arg(long = "captcha-proxy", default_value = "")]
+    captcha_proxy: String,
 }
 
 fn main() {
@@ -250,6 +254,13 @@ async fn run(arguments: Arguments) -> Result<i32> {
             .parse()
             .with_context(|| format!("--listen-peer: {}", arguments.listen_peer))?;
         dispatcher::Dispatcher::restrict_listen_peer(peer);
+    }
+    if !arguments.captcha_proxy.is_empty() {
+        let address = arguments
+            .captcha_proxy
+            .parse()
+            .with_context(|| format!("--captcha-proxy: {}", arguments.captcha_proxy))?;
+        captcha_proxy::spawn(address).await?;
     }
     if arguments.validate_vk_hashes {
         run_vk_hash_validation(&arguments).await?;
@@ -629,6 +640,7 @@ fn normalize_cli_argument(argument: String) -> String {
         "vk-api",
         "vk-api-count",
         "vk-api-calls",
+        "captcha-proxy",
     ];
     let Some(rest) = argument.strip_prefix('-') else {
         return argument;

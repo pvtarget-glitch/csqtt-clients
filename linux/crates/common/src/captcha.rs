@@ -35,11 +35,16 @@ pub fn solve(request: &CaptchaRequest) -> Result<String, String> {
         return Err("no graphical session".into());
     }
     let helper = helper_path().ok_or("captcha helper is not installed")?;
-    let output = Command::new(&helper)
+    let mut command = Command::new(&helper);
+    command
         .arg("--url")
         .arg(&request.url)
         .arg("--timeout")
-        .arg(request.timeout_secs.to_string())
+        .arg(request.timeout_secs.to_string());
+    if let Some(proxy) = &request.proxy {
+        command.arg("--proxy").arg(proxy);
+    }
+    let output = command
         .stdin(Stdio::null())
         .stderr(Stdio::inherit())
         .output()

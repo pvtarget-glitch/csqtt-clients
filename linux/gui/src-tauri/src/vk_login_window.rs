@@ -78,7 +78,12 @@ pub fn login(app: &AppHandle) -> Result<LoginResult, String> {
     let label = format!("vk-login-{}", NEXT.fetch_add(1, Ordering::Relaxed));
     let (sender, receiver) = mpsc::channel::<Outcome>();
     let navigation_sender = sender.clone();
-    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url.clone()))
+    let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url.clone()));
+    // Пока туннель поднят — мимо него, через прокси ядра: вход с обычного
+    // адреса, а не с адреса сервера.
+    let (builder, data_dir) =
+        crate::webview_proxy::apply(builder, crate::webview_proxy::current().as_deref());
+    let window = builder
         .title("Вход в VK — csqtt")
         .inner_size(520.0, 720.0)
         .initialization_script(REPORT_JS)
@@ -131,6 +136,7 @@ pub fn login(app: &AppHandle) -> Result<LoginResult, String> {
     if let Some(window) = app.get_webview_window(&label) {
         let _ = window.destroy();
     }
+    crate::webview_proxy::drop_later(data_dir);
     result
 }
 

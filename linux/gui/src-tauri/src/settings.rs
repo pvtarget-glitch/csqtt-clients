@@ -12,6 +12,8 @@ pub struct GuiSettings {
     pub close_to_tray: bool,
     /// При автозапуске окно не показывается.
     pub start_minimized: bool,
+    /// Проверять обновления при запуске и раз в 12 часов.
+    pub auto_update_check: bool,
 }
 
 impl Default for GuiSettings {
@@ -19,6 +21,7 @@ impl Default for GuiSettings {
         Self {
             close_to_tray: true,
             start_minimized: true,
+            auto_update_check: true,
         }
     }
 }

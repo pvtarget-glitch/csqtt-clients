@@ -225,7 +225,7 @@ async function copyLink() {
             отключении — чужие ссылки не нужны.
           </p>
           <div class="login-row">
-            <button class="btn" type="button" :disabled="loggingIn" @click="vkLogin">
+            <button class="button" type="button" :disabled="loggingIn" @click="vkLogin">
               {{ loggingIn ? "Жду вход в окне VK…" : draft.vk_token ? "Войти заново" : "Войти в VK" }}
             </button>
             <span class="login-state">{{ draft.vk_token ? "Токен получен" : "Вход не выполнен" }}</span>

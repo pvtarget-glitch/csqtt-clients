@@ -10,7 +10,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 csqtt-common = { path = "../../crates/common" }
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-proxy"] }
 tauri-plugin-single-instance = "2"
 serde.workspace = true
 serde_json.workspace = true

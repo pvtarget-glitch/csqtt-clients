@@ -105,8 +105,18 @@ def main():
     parser = argparse.ArgumentParser(description="Окно ручной капчи VK для csqtt")
     parser.add_argument("--url", required=True, help="адрес страницы проверки (https, домены VK)")
     parser.add_argument("--timeout", type=int, default=55, help="сколько секунд ждать решения")
+    parser.add_argument(
+        "--proxy",
+        default="",
+        help="HTTPS-прокси ядра 127.0.0.1:порт: окно ходит в VK мимо туннеля, как ядро",
+    )
     parser.add_argument("--insecure-test", action="store_true", help=argparse.SUPPRESS)
     arguments = parser.parse_args()
+    proxy = arguments.proxy.strip()
+    if proxy:
+        host, _, port = proxy.partition(":")
+        if host != "127.0.0.1" or not port.isdigit() or not 0 < int(port) < 65536:
+            finish("ERROR", "bad proxy address", 1)
 
     if not url_allowed(arguments.url, arguments.insecure_test):
         finish("ERROR", "captcha url is not allowed", 1)
@@ -173,8 +183,15 @@ def main():
         )
     )
 
+    context = WebKit2.WebContext.new_ephemeral()
+    if proxy:
+        # Контекст эфемерный и свой у окна: прокси не затрагивает другие окна.
+        proxy_settings = WebKit2.NetworkProxySettings.new("http://" + proxy, None)
+        context.get_website_data_manager().set_network_proxy_settings(
+            WebKit2.NetworkProxyMode.CUSTOM, proxy_settings
+        )
     view = WebKit2.WebView(
-        web_context=WebKit2.WebContext.new_ephemeral(),
+        web_context=context,
         user_content_manager=content,
     )
     settings = view.get_settings()

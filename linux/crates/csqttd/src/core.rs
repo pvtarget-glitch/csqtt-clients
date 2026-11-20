@@ -87,6 +87,8 @@ pub struct CoreLaunch<'a> {
     pub tun: &'a CoreTun,
     /// Каталог ядра в /run: рабочий каталог и файлы со списками доменов.
     pub work_dir: &'a Path,
+    /// Порт HTTPS-прокси ядра для окна проверки VK.
+    pub captcha_proxy: Option<u16>,
 }
 
 /// Как ядро получает пакеты туннеля.
@@ -126,6 +128,9 @@ pub fn build_arguments(launch: &CoreLaunch<'_>, user_domains: Option<&Path>) -> 
         format!("--gen={}", launch.generation),
         format!("--salt={}", launch.salt),
     ];
+    if let Some(port) = launch.captcha_proxy {
+        arguments.push(format!("--captcha-proxy=127.0.0.1:{port}"));
+    }
     match launch.tun {
         CoreTun::Uds(name) => {
             arguments.push("--listen=127.0.0.1:0".to_owned());
@@ -756,12 +761,14 @@ mod tests {
             salt: "00",
             tun: &tun,
             work_dir: Path::new("/tmp"),
+            captcha_proxy: Some(40123),
         };
         let arguments = build_arguments(&launch, None);
         for expected in [
             "--listen=127.0.0.1:40001",
             "--listen-peer=127.0.0.1:40002",
             "--bind-interface=en0",
+            "--captcha-proxy=127.0.0.1:40123",
         ] {
             assert!(
                 arguments.iter().any(|a| a == expected),
@@ -824,6 +831,7 @@ mod tests {
             salt: "00ff",
             tun: &CoreTun::Uds("csqtt_tun_test".into()),
             work_dir: Path::new("/nonexistent"),
+            captcha_proxy: None,
         };
         build_arguments(&launch, Some(Path::new("/run/csqtt/core/user-domains.txt")))
     }
@@ -1023,6 +1031,7 @@ mod tests {
             salt: "00112233445566778899aabbccddeeff",
             tun: &CoreTun::Uds(uds_name.clone()),
             work_dir: &work_dir,
+            captcha_proxy: None,
         };
         let mut child = StdCommand::new(&config.core_path)
             .args(build_arguments(&launch, None))

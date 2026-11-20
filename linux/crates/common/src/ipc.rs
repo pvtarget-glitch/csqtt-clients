@@ -111,6 +111,10 @@ pub struct CaptchaRequest {
     pub url: String,
     /// Сколько секунд ядро ждёт ответа.
     pub timeout_secs: u64,
+    /// HTTPS-прокси ядра (`127.0.0.1:порт`): через него окно ходит в VK
+    /// мимо туннеля, как само ядро. None — открывать без прокси.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,6 +174,9 @@ pub struct Status {
     /// Подписчиков, готовых показать окно капчи.
     #[serde(default)]
     pub captcha_handlers: u32,
+    /// HTTPS-прокси ядра к доменам VK (`127.0.0.1:порт`), пока ядро работает.
+    #[serde(default)]
+    pub captcha_proxy: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

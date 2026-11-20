@@ -53,8 +53,17 @@ jobs:
   deb:
     needs: server
     # Сборка на 22.04 (glibc 2.35): пакет ставится на Ubuntu 22.04+,
-    # Mint 21+ и Debian 12+ — glibc совместима вперёд.
-    runs-on: ubuntu-22.04
+    # Mint 21+ и Debian 12+ — glibc совместима вперёд. Из тех же бинарников
+    # собираются .rpm (Fedora, openSUSE) и пакет Arch.
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
     defaults:
       run:
         working-directory: linux
@@ -85,6 +94,7 @@ jobs:
           sudo tests/integration.sh
           python3 tests/link_compat.py target/debug/csqtt
       - name: Тесты ядра
+        if: matrix.arch == 'amd64'
         working-directory: rust-client
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/linux/target/core
@@ -100,6 +110,7 @@ jobs:
           scripts/build-core.sh
           CSQTT_CORE_BIN="$PWD/dist/csqtt-core" cargo test -p csqttd -- --ignored
       - name: Установка сервера по SSH (настоящий sshd, имитатор deploy.sh)
+        if: matrix.arch == 'amd64'
         run: |
           sudo apt-get install -y openssh-server openssh-client
           sudo tests/deploy-test.sh
@@ -111,10 +122,60 @@ jobs:
         run: |
           chmod 755 dist/server/csqtt-linux-*
           scripts/build-deb.sh --no-core
+      - name: Пакеты .rpm и Arch из тех же бинарников
+        run: |
+          sudo apt-get install -y rpm libarchive-tools zstd
+          scripts/build-rpm-arch.sh dist/csqtt-linux_*_${{ matrix.arch }}.deb
       - uses: actions/upload-artifact@v4
         with:
-          name: deb-amd64
-          path: linux/dist/*.deb
+          name: linux-${{ matrix.arch }}
+          path: |
+            linux/dist/*.deb
+            linux/dist/*.rpm
+            linux/dist/*.pkg.tar.zst
+
+  linux-check:
+    # Пакеты ставятся в настоящих дистрибутивах: зависимости находятся,
+    # библиотеки окна разрешаются, пользователь ядра создаётся.
+    needs: deb
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: fedora
+            image: fedora:latest
+            install: dnf install -y /pkg/csqtt-*.x86_64.rpm
+          - name: opensuse
+            image: opensuse/tumbleweed:latest
+            install: zypper --non-interactive install --allow-unsigned-rpm /pkg/csqtt-*.x86_64.rpm
+          - name: arch
+            image: archlinux:latest
+            install: pacman -Syu --noconfirm && pacman -U --noconfirm /pkg/csqtt-*-x86_64.pkg.tar.zst
+          - name: debian
+            image: debian:12
+            install: apt-get update && apt-get install -y /pkg/csqtt-linux_*_amd64.deb
+    name: linux-check (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-amd64
+          path: pkg
+      - name: Установка и проверка в ${{ matrix.name }}
+        run: |
+          docker run --rm -v "$PWD/pkg:/pkg:ro" "${{ matrix.image }}" sh -c '
+            set -e
+            ${{ matrix.install }}
+            csqtt --version
+            csqttd --version
+            command -v csqtt-gui
+            missing="$(ldd "$(command -v csqtt-gui)" "$(command -v csqttd)" /usr/lib/csqtt/csqtt-core | grep "not found" || true)"
+            [ -z "$missing" ] || { echo "нет библиотек: $missing"; exit 1; }
+            getent passwd csqtt-core
+            getent group csqtt
+            grep -q "ExecStart=$(command -v csqttd)" /usr/lib/systemd/system/csqttd.service
+            echo "пакет ставится и запускается"
+          '
 
   router:
     # Роутер Keenetic с Entware (aarch64): служба, CLI и ядро, musl.
@@ -144,6 +205,53 @@ jobs:
         with:
           name: router-aarch64
           path: linux/dist/csqtt-router-*.tar.gz
+
+  openwrt:
+    # OpenWrt 24.10 и 25.x: статические бинарники musl и установочный скрипт.
+    strategy:
+      fail-fast: true
+      matrix:
+        target: [aarch64-unknown-linux-musl, armv7-unknown-linux-musleabihf, x86_64-unknown-linux-musl]
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+          workspaces: |
+            linux -> target
+            rust-client -> ../linux/target/core-router
+      - name: Сборка
+        env:
+          CSQTT_OPENWRT_TARGET: ${{ matrix.target }}
+        run: |
+          pip install --user --break-system-packages cargo-zigbuild
+          export PATH="$HOME/.local/bin:$PATH"
+          scripts/build-openwrt.sh
+      - name: Проверка архива
+        run: |
+          archive="$(ls dist/csqtt-openwrt-*.tar.gz)"
+          mkdir -p check && tar -C check -xzf "$archive"
+          dir="$(ls -d check/*/)"
+          for file in csqttd.init install.sh uninstall.sh csqttd.toml ARCH README.md bin/csqttd bin/csqtt bin/csqtt-core; do
+            [ -e "$dir/$file" ] || { echo "нет $file"; exit 1; }
+          done
+          sh -n "$dir/install.sh" && sh -n "$dir/uninstall.sh" && sh -n "$dir/csqttd.init"
+          for binary in "$dir"/bin/*; do
+            file -b "$binary" | grep -Eq 'statically linked|static-pie linked' || { echo "$binary не статический"; file "$binary"; exit 1; }
+          done
+          if [ "${{ matrix.target }}" = x86_64-unknown-linux-musl ]; then
+            "$dir/bin/csqtt" --version
+            "$dir/bin/csqttd" --version
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-${{ matrix.target }}
+          path: linux/dist/csqtt-openwrt-*.tar.gz
 
   macos:
     # Установщики .pkg для Apple Silicon и Intel (сборка на Apple Silicon).
@@ -244,7 +352,7 @@ jobs:
 
   release:
     if: ${{ github.event.inputs.make_release == 'true' }}
-    needs: [deb, router, macos, windows]
+    needs: [deb, linux-check, router, openwrt, macos, windows]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -261,11 +369,17 @@ jobs:
           fi
       - uses: actions/download-artifact@v4
         with:
-          name: deb-amd64
+          pattern: linux-*
+          merge-multiple: true
           path: dist
       - uses: actions/download-artifact@v4
         with:
           name: router-aarch64
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: openwrt-*
+          merge-multiple: true
           path: dist
       - uses: actions/download-artifact@v4
         with:
@@ -275,17 +389,26 @@ jobs:
         with:
           name: windows-setup
           path: dist
+      - name: Контрольные суммы (по ним окно и csqtt update проверяют обновления)
+        run: |
+          cd dist
+          sha256sum *.deb *.rpm *.pkg.tar.zst *.tar.gz *.pkg *-setup.exe > SHA256SUMS
+          cat SHA256SUMS
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.version }}
           target_commitish: ${{ github.sha }}
-          name: "csqtt-linux ${{ github.event.inputs.version }}"
+          name: "csqtt-clients ${{ github.event.inputs.version }}"
           body_path: release-notes.md
           files: |
             dist/*.deb
+            dist/*.rpm
+            dist/*.pkg.tar.zst
             dist/csqtt-router-*.tar.gz
+            dist/csqtt-openwrt-*.tar.gz
             dist/*.pkg
             dist/*-setup.exe
+            dist/SHA256SUMS
           draft: false
           prerelease: ${{ github.event.inputs.prerelease == 'true' }}
