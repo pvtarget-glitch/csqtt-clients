@@ -33,6 +33,11 @@ chmod 755 "$WORK"
 install -m 755 "$ROOT/tests/fake-core.py" "$WORK/fake-core"
 DNS_BEFORE="$(scutil --dns | grep 'nameserver\[' | sort -u)"
 UPLINK="$(route -n get default | awk '/interface:/{print $2}')"
+UPLINK_INDEX="$(python3 -c "import socket; print(socket.if_nametoindex('$UPLINK'))")"
+probe() { python3 "$ROOT/tests/bound-probe.py" "$UPLINK_INDEX" "$1" "$2"; }
+BASE_TCP="$(probe tcp 1.1.1.1)"
+BASE_DNS="$(probe dns 8.8.8.8)"
+echo "физический интерфейс $UPLINK; до подключения: tcp $BASE_TCP, dns $BASE_DNS"
 
 cat > "$WORK/csqttd.toml" <<EOF
 core_path = "$WORK/fake-core"
@@ -77,6 +82,19 @@ contains "ядро привязано к физическому интерфей
 absent "без передачи дескриптора" "--tun-uds" "$LOG"
 contains "DNS туннеля в системе" "1.1.1.1" "$(scutil --dns)"
 
+echo "== блокировка мимо туннеля (pf)"
+contains "правила pf в якоре csqtt" "block drop out quick all" "$(pfctl -a com.apple/csqtt -s rules 2>&1)"
+contains "pf включён" "Status: Enabled" "$(pfctl -s info 2>&1)"
+if [[ "$BASE_TCP" == open* ]]; then
+  contains "TCP мимо туннеля заблокирован" "blocked" "$(probe tcp 1.1.1.1)"
+  contains "исключение по IP пропускается мимо туннеля" "192.0.2.0/24" "$(pfctl -a com.apple/csqtt -s rules 2>&1)"
+else
+  echo "  --   интернета на машине нет, проверка TCP пропущена"
+fi
+if [[ "$BASE_DNS" == open* ]]; then
+  contains "DNS мимо туннеля заблокирован" "blocked" "$(probe dns 8.8.8.8)"
+fi
+
 PING="$(ping -c 2 -t 4 198.51.100.77 2>&1)"
 contains "пакет дошёл до ядра через пересылку" "dst=198.51.100.77" "$(csqtt logs -n 0)"
 contains "ответ ядра вернулся через utun" "bytes from 198.51.100.77" "$PING"
@@ -87,6 +105,10 @@ for _ in $(seq 1 30); do [ "$(field state)" = disconnected ] && break; sleep 0.2
 absent "маршрут в туннель снят" "interface: $UTUN" "$(route -n get 198.51.100.77 2>&1)"
 absent "маршрут исключения снят" "destination: 192.0.2.0" "$(route -n get 192.0.2.10 2>&1)"
 absent "utun удалён" "10.99.0.2" "$(ifconfig 2>&1)"
+absent "правила pf сняты" "block drop" "$(pfctl -a com.apple/csqtt -s rules 2>&1)"
+if [[ "$BASE_TCP" == open* ]]; then
+  contains "после отключения сеть снова открыта" "open" "$(probe tcp 1.1.1.1)"
+fi
 [ "$(scutil --dns | grep 'nameserver\[' | sort -u)" = "$DNS_BEFORE" ] && ok "DNS восстановлен" || bad "DNS восстановлен" "$(scutil --dns | grep nameserver)"
 
 echo

@@ -38,16 +38,32 @@ pub struct NetParams {
     pub mode: Mode,
     /// На macOS не используется (нет cgroup); поле для общего кода.
     pub selected_only: bool,
+    /// Блокировать трафик мимо туннеля через pf, пока туннель включён.
+    pub kill_switch: bool,
+    /// Пользователь ядра для pf (`user …`): его соединения с VK идут мимо
+    /// туннеля. Имя, если оно простое, иначе UID.
+    pub core_user: String,
 }
 
 impl NetParams {
-    pub fn from_config(config: &DaemonConfig, _core_uid: u32) -> Self {
+    pub fn from_config(config: &DaemonConfig, core_uid: u32) -> Self {
         Self {
             mtu: config.mtu,
             dns: config.dns,
             ipv6: config.ipv6,
             mode: config.mode,
             selected_only: false,
+            kill_switch: config.kill_switch,
+            core_user: if !config.core_user.is_empty()
+                && config
+                    .core_user
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+            {
+                config.core_user.clone()
+            } else {
+                core_uid.to_string()
+            },
         }
     }
 }
@@ -71,6 +87,9 @@ pub struct Network {
     dns_applied: Option<Vec<Ipv4Addr>>,
     /// Сети мимо туннеля и маршрут, через который они поставлены.
     direct: Vec<(String, DirectVia)>,
+    /// Блокировка pf включена; токен `pfctl -E`, если pf включали мы.
+    pf_active: bool,
+    pf_token: Option<String>,
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -135,6 +154,8 @@ impl Network {
             ipv6_blocked: false,
             dns_applied: None,
             direct: Vec::new(),
+            pf_active: false,
+            pf_token: None,
             tasks,
         })
     }
@@ -229,6 +250,57 @@ impl Network {
     /// Сети мимо туннеля: маршруты через шлюз физического интерфейса.
     /// Они точнее маршрутов 0/1 и 128/1 туннеля, поэтому выигрывают.
     pub fn set_direct_networks(&mut self, networks: &[String]) -> Result<()> {
+        // Блокировка пересобирается под новый список исключений. Ошибка
+        // блокировки не мешает туннелю, но о ней сообщается.
+        let kill_switch = self.update_kill_switch(networks);
+        let routes = self.set_direct_routes(networks);
+        match (kill_switch, routes) {
+            (Ok(()), result) => result,
+            (Err(error), Ok(())) => Err(error),
+            (Err(first), Err(second)) => bail!("{first:#}; {second:#}"),
+        }
+    }
+
+    /// Правила pf в якоре `com.apple/csqtt`: основной набор правил macOS
+    /// ссылается на `com.apple/*`, поэтому якорь применяется без правки
+    /// /etc/pf.conf. Загрузка якоря заменяет его правила целиком, так что
+    /// между старым и новым набором окна без защиты нет.
+    fn update_kill_switch(&mut self, networks: &[String]) -> Result<()> {
+        if !self.params.kill_switch || self.params.mode == Mode::Interface || !self.routes_installed
+        {
+            self.disable_kill_switch();
+            return Ok(());
+        }
+        let direct = csqtt_common::profile::canonical_ipv4_nets(networks);
+        let rules = pf_rules(&self.utun_name, &self.params.core_user, &direct);
+        pfctl_stdin(&["-a", PF_ANCHOR, "-f", "-"], &rules)
+            .context("блокировка трафика мимо туннеля (pf) не включена")?;
+        self.pf_active = true;
+        if self.pf_token.is_none() {
+            // pf со ссылкой: при отключении выключаем только свою ссылку,
+            // а не pf целиком, если его включил кто-то ещё.
+            match pfctl_enable() {
+                Ok(token) => self.pf_token = Some(token),
+                Err(error) => {
+                    self.disable_kill_switch();
+                    return Err(error.context("pf не включён"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn disable_kill_switch(&mut self) {
+        if self.pf_active {
+            let _ = run("pfctl", &["-q", "-a", PF_ANCHOR, "-F", "all"]);
+            self.pf_active = false;
+        }
+        if let Some(token) = self.pf_token.take() {
+            let _ = run("pfctl", &["-q", "-X", &token]);
+        }
+    }
+
+    fn set_direct_routes(&mut self, networks: &[String]) -> Result<()> {
         self.remove_direct();
         if self.params.mode == Mode::Interface || networks.is_empty() {
             return Ok(());
@@ -265,6 +337,7 @@ impl Network {
     }
 
     pub fn teardown(&mut self) {
+        // Блокировка снимается последней: сначала маршруты и DNS.
         self.remove_direct();
         if self.dns_applied.take().is_some() {
             restore_dns();
@@ -304,6 +377,7 @@ impl Network {
             }
             self.ipv6_blocked = false;
         }
+        self.disable_kill_switch();
         for task in self.tasks.drain(..) {
             task.abort();
         }
@@ -320,6 +394,71 @@ impl Drop for Network {
 /// Следы прошлого запуска: маршруты исчезают вместе с utun, DNS — нет.
 pub fn cleanup_stale(_params: &NetParams) {
     restore_dns();
+    // Правила, оставшиеся после аварийного завершения службы.
+    let _ = run("pfctl", &["-q", "-a", PF_ANCHOR, "-F", "all"]);
+}
+
+const PF_ANCHOR: &str = "com.apple/csqtt";
+
+/// Правила блокировки: мимо туннеля — только loopback, ядро, локальная сеть,
+/// DHCP и исключения по IP. DNS мимо туннеля запрещён даже в локальную сеть.
+fn pf_rules(utun: &str, core_user: &str, direct: &[String]) -> String {
+    let mut rules = format!(
+        "pass quick on lo0 all\n\
+         pass quick on {utun} all\n\
+         pass out quick proto {{ tcp udp }} all user {core_user} keep state\n\
+         pass out quick inet proto udp from any port 68 to any port 67\n\
+         block drop out quick proto {{ tcp udp }} to any port 53\n\
+         pass out quick inet to {{ 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 \
+         100.64.0.0/10 224.0.0.0/4 255.255.255.255 }}\n\
+         pass out quick inet6 to {{ fe80::/10 ff00::/8 fc00::/7 }}\n"
+    );
+    if !direct.is_empty() {
+        rules.push_str(&format!(
+            "pass out quick inet to {{ {} }}\n",
+            direct.join(" ")
+        ));
+    }
+    rules.push_str("block drop out quick all\n");
+    rules
+}
+
+fn pfctl_stdin(arguments: &[&str], input: &str) -> Result<()> {
+    let mut child = Command::new("/sbin/pfctl")
+        .args(arguments)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("запуск pfctl")?;
+    child
+        .stdin
+        .take()
+        .context("stdin pfctl")?
+        .write_all(input.as_bytes())?;
+    let output = child.wait_with_output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+    bail!("pfctl: {}", String::from_utf8_lossy(&output.stderr).trim())
+}
+
+/// `pfctl -E` включает pf со ссылкой и печатает её токен.
+fn pfctl_enable() -> Result<String> {
+    let output = Command::new("/sbin/pfctl")
+        .arg("-E")
+        .output()
+        .context("запуск pfctl")?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    text.lines()
+        .find_map(|line| line.trim().strip_prefix("Token : "))
+        .map(|token| token.trim().to_owned())
+        .filter(|token| token.chars().all(|c| c.is_ascii_digit()) && !token.is_empty())
+        .ok_or_else(|| anyhow!("pfctl -E: {}", text.trim()))
 }
 
 // --- utun ------------------------------------------------------------------

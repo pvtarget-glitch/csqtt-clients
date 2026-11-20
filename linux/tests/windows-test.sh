@@ -55,7 +55,7 @@ EOF2
 
 # Физический интерфейс и доступность интернета до подключения.
 UPLINK="$(powershell -NoProfile -Command "(Get-NetRoute -DestinationPrefix 0.0.0.0/0 | Sort-Object RouteMetric | Select-Object -First 1).InterfaceIndex" | tr -d '\r')"
-probe() { python "$ROOT/tests/windows-probe.py" "$UPLINK" "$1" "$2"; }
+probe() { python "$ROOT/tests/bound-probe.py" "$UPLINK" "$1" "$2"; }
 BASE_TCP="$(probe tcp 1.1.1.1)"
 BASE_DNS="$(probe dns 8.8.8.8)"
 echo "физический интерфейс $UPLINK; до подключения: tcp $BASE_TCP, dns $BASE_DNS"
