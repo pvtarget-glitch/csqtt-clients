@@ -4,11 +4,9 @@
 use crate::{link::CsqttLink, profile::Profile};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::{
-    io::Write,
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
-    path::PathBuf,
-};
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::{io::Write, path::PathBuf};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Store {
@@ -21,6 +19,11 @@ pub struct Store {
 pub fn config_dir() -> Result<PathBuf> {
     if let Some(dir) = std::env::var_os("CSQTT_CONFIG_DIR").filter(|dir| !dir.is_empty()) {
         return Ok(dir.into());
+    }
+    // Windows: %APPDATA%\csqtt.
+    #[cfg(windows)]
+    if let Some(dir) = std::env::var_os("APPDATA").filter(|dir| !dir.is_empty()) {
+        return Ok(PathBuf::from(dir).join("csqtt"));
     }
     if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME").filter(|dir| !dir.is_empty()) {
         return Ok(PathBuf::from(dir).join("csqtt"));
@@ -48,20 +51,22 @@ impl Store {
     pub fn save(&self) -> Result<()> {
         let path = store_path()?;
         let dir = path.parent().context("путь без каталога")?;
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        builder.mode(0o700);
+        builder
             .create(dir)
             .with_context(|| format!("создание {}", dir.display()))?;
         let text = toml::to_string_pretty(self).context("сериализация профилей")?;
         // Пишем во временный файл и переименовываем: обрыв записи не должен
         // оставить пользователя без профилей.
         let temporary = path.with_extension("toml.tmp");
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options
             .open(&temporary)
             .with_context(|| format!("запись {}", temporary.display()))?;
         file.write_all(text.as_bytes())?;

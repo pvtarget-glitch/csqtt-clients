@@ -5,25 +5,34 @@ use crate::{
     state::{Control, Shared},
 };
 use csqtt_common::ipc::{Event, Request, Response};
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(unix, not(target_os = "macos")))]
 use std::ffi::CString;
 use std::sync::Arc;
+#[cfg(unix)]
+use tokio::net::{UnixListener, UnixStream};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    net::{unix::OwnedWriteHalf, UnixListener, UnixStream},
+    io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
     sync::broadcast,
 };
 
 /// Запрос `up` несёт профиль со списками доменов — с запасом.
 const MAX_REQUEST_BYTES: u64 = 512 * 1024;
 
+/// Кто подключился.
+struct Peer {
+    uid: u32,
+    pid: Option<u32>,
+    allowed: bool,
+}
+
+#[cfg(unix)]
 pub async fn serve(shared: Arc<Shared>, listener: UnixListener) {
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
                 let shared = shared.clone();
                 tokio::spawn(async move {
-                    handle_connection(shared, stream).await;
+                    handle_unix(shared, stream).await;
                 });
             }
             Err(error) => {
@@ -34,9 +43,56 @@ pub async fn serve(shared: Arc<Shared>, listener: UnixListener) {
     }
 }
 
+#[cfg(unix)]
+async fn handle_unix(shared: Arc<Shared>, stream: UnixStream) {
+    let credentials = stream.peer_cred().ok();
+    let uid = credentials.map(|cred| cred.uid()).unwrap_or(u32::MAX);
+    let pid = credentials
+        .and_then(|cred| cred.pid())
+        .filter(|pid| *pid > 0)
+        .map(|pid| pid as u32);
+    let allowed = authorized(&shared, uid);
+    let (reader, writer) = stream.into_split();
+    handle_connection(shared, reader, writer, Peer { uid, pid, allowed }).await;
+}
+
+/// Windows: именованный канал `\\.\pipe\csqttd`. Кто может подключиться,
+/// решает ACL канала: SYSTEM, администраторы и вошедшие в систему
+/// пользователи (как группа csqtt на Linux).
+#[cfg(windows)]
+pub async fn serve(shared: Arc<Shared>, name: String) {
+    let mut first = true;
+    loop {
+        let server = match crate::platform::pipe_server(&name, first) {
+            Ok(server) => server,
+            Err(error) => {
+                eprintln!("канал {name}: {error}");
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            }
+        };
+        first = false;
+        if server.connect().await.is_err() {
+            continue;
+        }
+        let pid = crate::platform::pipe_client_pid(&server);
+        let shared = shared.clone();
+        tokio::spawn(async move {
+            let (reader, writer) = tokio::io::split(server);
+            let peer = Peer {
+                uid: 0,
+                pid,
+                allowed: true,
+            };
+            handle_connection(shared, reader, writer, peer).await;
+        });
+    }
+}
+
 /// Управлять туннелем могут root, пользователь самого демона и участники
 /// управляющей группы. Членство читается из базы пользователей при каждом
 /// подключении, поэтому после `usermod -aG` перелогиниваться не нужно.
+#[cfg(unix)]
 fn authorized(shared: &Shared, uid: u32) -> bool {
     if uid == 0 || uid == nix::unistd::geteuid().as_raw() {
         return true;
@@ -53,7 +109,7 @@ fn authorized(shared: &Shared, uid: u32) -> bool {
     member_by_directory(&user.name, user.gid, &group)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn member_by_directory(name: &str, gid: nix::unistd::Gid, group: &nix::unistd::Group) -> bool {
     CString::new(name)
         .ok()
@@ -70,7 +126,7 @@ fn member_by_directory(name: &str, _gid: nix::unistd::Gid, group: &nix::unistd::
         .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains("is a member"))
 }
 
-async fn send(writer: &mut OwnedWriteHalf, response: &Response) -> bool {
+async fn send<W: AsyncWrite + Unpin>(writer: &mut W, response: &Response) -> bool {
     let Ok(mut line) = serde_json::to_string(response) else {
         return false;
     };
@@ -78,14 +134,14 @@ async fn send(writer: &mut OwnedWriteHalf, response: &Response) -> bool {
     writer.write_all(line.as_bytes()).await.is_ok()
 }
 
-async fn handle_connection(shared: Arc<Shared>, stream: UnixStream) {
-    let credentials = stream.peer_cred().ok();
-    let uid = credentials.map(|cred| cred.uid()).unwrap_or(u32::MAX);
-    let peer_pid = credentials
-        .and_then(|cred| cred.pid())
-        .filter(|pid| *pid > 0);
-    let (reader, mut writer) = stream.into_split();
-    if !authorized(&shared, uid) {
+async fn handle_connection<R, W>(shared: Arc<Shared>, reader: R, mut writer: W, peer: Peer)
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let uid = peer.uid;
+    let peer_pid = peer.pid;
+    if !peer.allowed {
         let message = format!(
             "нет прав на управление туннелем: добавь себя в группу {0} (sudo usermod -aG {0} $USER)",
             shared.config.control_group
@@ -153,10 +209,10 @@ async fn handle_connection(shared: Arc<Shared>, stream: UnixStream) {
                         };
                         let response = match peer_pid {
                             Some(pid) => match crate::bypass::BypassParams::from_config(&shared.config)
-                                .add_process(pid as u32, keeper.group())
+                                .add_process(pid, keeper.group())
                             {
                                 Ok(()) => {
-                                    keeper.register(pid as u32);
+                                    keeper.register(pid);
                                     shared.log(format!(
                                         "процесс {pid} (uid {uid}) идёт {}",
                                         keeper.group().describe()

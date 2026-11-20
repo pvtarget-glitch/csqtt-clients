@@ -15,6 +15,12 @@ mod net;
 #[cfg(target_os = "macos")]
 #[path = "net_macos.rs"]
 mod net;
+#[cfg(windows)]
+#[path = "net_windows.rs"]
+mod net;
+#[cfg(windows)]
+#[path = "platform_windows.rs"]
+mod platform;
 mod server;
 mod session;
 mod state;
@@ -22,11 +28,13 @@ mod watch;
 
 use anyhow::{bail, Context, Result};
 use config::DaemonConfig;
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::{
-    os::unix::fs::{DirBuilderExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::Arc,
 };
+#[cfg(unix)]
 use tokio::{
     net::UnixListener,
     signal::unix::{signal, SignalKind},
@@ -47,13 +55,13 @@ struct Options {
     cleanup: bool,
 }
 
-fn parse_options() -> Result<Option<Options>> {
+fn parse_options(arguments: Vec<String>) -> Result<Option<Options>> {
     let mut options = Options {
         config: PathBuf::from(csqtt_common::DAEMON_CONFIG_PATH),
         explicit_config: false,
         cleanup: false,
     };
-    let mut arguments = std::env::args().skip(1);
+    let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--config" | "-c" => {
@@ -78,6 +86,15 @@ fn parse_options() -> Result<Option<Options>> {
     Ok(Some(options))
 }
 
+#[cfg(windows)]
+fn prepare_directories(config: &DaemonConfig, _identity: core::CoreIdentity) -> Result<PathBuf> {
+    let work_dir = config.runtime_dir.join("core");
+    std::fs::create_dir_all(&work_dir)
+        .with_context(|| format!("создание {}", work_dir.display()))?;
+    Ok(work_dir)
+}
+
+#[cfg(unix)]
 fn prepare_directories(config: &DaemonConfig, identity: core::CoreIdentity) -> Result<PathBuf> {
     std::fs::DirBuilder::new()
         .recursive(true)
@@ -102,6 +119,7 @@ fn prepare_directories(config: &DaemonConfig, identity: core::CoreIdentity) -> R
     Ok(work_dir)
 }
 
+#[cfg(unix)]
 fn bind_socket(path: &Path) -> Result<UnixListener> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -132,6 +150,7 @@ async fn run(options: Options) -> Result<()> {
         net::cleanup_stale(&net_params);
         return Ok(());
     }
+    #[cfg(unix)]
     if !nix::unistd::geteuid().is_root() {
         eprintln!(
             "внимание: csqttd запущен не от root — TUN и маршруты, скорее всего, не поднимутся"
@@ -139,6 +158,7 @@ async fn run(options: Options) -> Result<()> {
     }
     prepare_directories(&config, identity)?;
     net::cleanup_stale(&net_params);
+    #[cfg(unix)]
     let listener = bind_socket(&config.socket_path)?;
     if !config.core_path.is_file() {
         eprintln!(
@@ -149,21 +169,25 @@ async fn run(options: Options) -> Result<()> {
 
     let socket_path = config.socket_path.clone();
     let shared = Arc::new(state::Shared::new(config, identity));
+    #[cfg(unix)]
+    let core_owner = format!("uid {}", identity.uid);
+    #[cfg(windows)]
+    let core_owner = "учётной записи службы".to_owned();
     eprintln!(
-        "csqttd {} слушает {}; ядро работает от uid {}",
+        "csqttd {} слушает {}; ядро работает от {core_owner}",
         env!("CARGO_PKG_VERSION"),
         socket_path.display(),
-        identity.uid
     );
 
+    #[cfg(unix)]
     let server = tokio::spawn(server::serve(shared.clone(), listener));
+    #[cfg(windows)]
+    let server = tokio::spawn(server::serve(
+        shared.clone(),
+        socket_path.to_string_lossy().into_owned(),
+    ));
     tokio::spawn(keep_direct_processes(shared.clone()));
-    let mut terminate = signal(SignalKind::terminate())?;
-    let mut interrupt = signal(SignalKind::interrupt())?;
-    tokio::select! {
-        _ = terminate.recv() => {}
-        _ = interrupt.recv() => {}
-    }
+    wait_for_shutdown().await?;
     eprintln!("csqttd: получен сигнал завершения, снимаю туннель");
     server.abort();
     let _ = session::stop(&shared).await;
@@ -172,8 +196,33 @@ async fn run(options: Options) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+async fn wait_for_shutdown() -> Result<()> {
+    let mut terminate = signal(SignalKind::terminate())?;
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    tokio::select! {
+        _ = terminate.recv() => {}
+        _ = interrupt.recv() => {}
+    }
+    Ok(())
+}
+
+/// Windows: Ctrl+C в консоли или команда «Остановить» диспетчера служб.
+#[cfg(windows)]
+async fn wait_for_shutdown() -> Result<()> {
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => result?,
+        _ = platform::service_stop_requested() => {}
+    }
+    Ok(())
+}
+
 fn main() {
-    let options = match parse_options() {
+    #[cfg(windows)]
+    if let Some(code) = platform::service_command() {
+        std::process::exit(code);
+    }
+    let options = match parse_options(std::env::args().skip(1).collect()) {
         Ok(Some(options)) => options,
         Ok(None) => return,
         Err(error) => {
@@ -226,6 +275,34 @@ async fn keep_direct_processes(shared: std::sync::Arc<state::Shared>) {
                 "процесс {pid} вернулся в группу «{}»",
                 group.describe()
             ));
+        }
+    }
+}
+
+/// Запуск под диспетчером служб Windows; возвращает код выхода.
+#[cfg(windows)]
+pub fn run_service(arguments: Vec<String>) -> u32 {
+    let options = match parse_options(arguments) {
+        Ok(Some(options)) => options,
+        Ok(None) => return 0,
+        Err(error) => {
+            eprintln!("{error:#}");
+            return 2;
+        }
+    };
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(_) => return 1,
+    };
+    match runtime.block_on(run(options)) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("csqttd: {error:#}");
+            1
         }
     }
 }

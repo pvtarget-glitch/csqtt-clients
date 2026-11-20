@@ -139,7 +139,7 @@ def wait_captcha(count, timeout=15):
 
 def main():
     event("PROCESS", {"pid": os.getpid()})
-    log("uid=%d gen=%d scenario=%s" % (os.getuid(), GENERATION, SCENARIO))
+    log("uid=%d gen=%d scenario=%s" % (os.getuid() if hasattr(os, "getuid") else 0, GENERATION, SCENARIO))
     log("argv: %s" % " ".join(sys.argv[1:]))
     log("env keys: %s" % ",".join(sorted(os.environ)))
     if "tun-uds" in ARGS:

@@ -59,7 +59,38 @@ pub struct SshArgs {
     agent: bool,
 }
 
+/// Чтение строки с консоли Windows без эха.
+#[cfg(windows)]
+fn read_secret(prompt: &str) -> Result<String> {
+    const STD_INPUT_HANDLE: u32 = -10i32 as u32;
+    const ENABLE_ECHO_INPUT: u32 = 0x0004;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetStdHandle(handle: u32) -> isize;
+        fn GetConsoleMode(console: isize, mode: *mut u32) -> i32;
+        fn SetConsoleMode(console: isize, mode: u32) -> i32;
+    }
+    eprint!("{prompt}");
+    std::io::stderr().flush().ok();
+    // SAFETY: стандартные вызовы консоли с собственными переменными.
+    let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+    let mut original = 0u32;
+    let is_console = unsafe { GetConsoleMode(handle, &mut original) } != 0;
+    if is_console {
+        unsafe { SetConsoleMode(handle, original & !ENABLE_ECHO_INPUT) };
+    }
+    let mut line = String::new();
+    let result = std::io::stdin().read_line(&mut line);
+    if is_console {
+        unsafe { SetConsoleMode(handle, original) };
+        eprintln!();
+    }
+    result.context("чтение пароля")?;
+    Ok(line.trim_end_matches(['\n', '\r']).to_owned())
+}
+
 /// Чтение строки с терминала без эха.
+#[cfg(unix)]
 fn read_secret(prompt: &str) -> Result<String> {
     eprint!("{prompt}");
     std::io::stderr().flush().ok();

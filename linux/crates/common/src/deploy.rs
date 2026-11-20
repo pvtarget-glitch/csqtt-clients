@@ -94,9 +94,16 @@ impl Cancel {
         if let Some(pid) = *lock(&self.child) {
             // SIGTERM процессу ssh: соединение рвётся, удалённая команда
             // получает SIGHUP.
+            #[cfg(unix)]
             unsafe {
                 libc::kill(pid as i32, libc::SIGTERM);
             }
+            #[cfg(windows)]
+            let _ = Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
         }
     }
 
@@ -126,13 +133,45 @@ pub fn askpass_answer(prompt: &str) -> Option<String> {
     None
 }
 
+/// Криптостойкие случайные байты системы. Без них пароли генерировать
+/// нельзя, поэтому ошибка — паника, а не слабый пароль.
+pub fn fill_random(bytes: &mut [u8]) {
+    #[cfg(unix)]
+    {
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut file| file.read_exact(bytes))
+            .expect("нет /dev/urandom");
+    }
+    #[cfg(windows)]
+    {
+        #[link(name = "bcrypt")]
+        unsafe extern "system" {
+            fn BCryptGenRandom(
+                algorithm: *mut std::ffi::c_void,
+                buffer: *mut u8,
+                length: u32,
+                flags: u32,
+            ) -> i32;
+        }
+        const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 2;
+        // SAFETY: буфер и его длина корректны.
+        let status = unsafe {
+            BCryptGenRandom(
+                std::ptr::null_mut(),
+                bytes.as_mut_ptr(),
+                bytes.len() as u32,
+                BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+            )
+        };
+        assert_eq!(status, 0, "BCryptGenRandom");
+    }
+}
+
 /// Случайная строка из [a-zA-Z0-9].
 pub fn random_token(length: usize) -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
     let mut bytes = vec![0u8; length * 2];
-    if let Ok(mut file) = std::fs::File::open("/dev/urandom") {
-        let _ = file.read_exact(&mut bytes);
-    }
+    fill_random(&mut bytes);
     bytes
         .iter()
         .filter(|byte| (**byte as usize) < 256 - 256 % ALPHABET.len())
@@ -144,9 +183,7 @@ pub fn random_token(length: usize) -> String {
 /// Случайный путь панели в виде UUID, как в Android-клиенте.
 pub fn random_secret_path() -> String {
     let mut bytes = [0u8; 16];
-    if let Ok(mut file) = std::fs::File::open("/dev/urandom") {
-        let _ = file.read_exact(&mut bytes);
-    }
+    fill_random(&mut bytes);
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
@@ -341,18 +378,25 @@ impl<'a> Connection<'a> {
             "ConnectTimeout=20",
             "ServerAliveInterval=15",
             "ServerAliveCountMax=8",
-            "ControlMaster=auto",
-            "ControlPersist=120",
             "LogLevel=ERROR",
         ]
         .iter()
         .flat_map(|option| ["-o".to_owned(), (*option).to_owned()])
         .collect();
-        options.push("-o".into());
-        options.push(format!(
-            "ControlPath={}",
-            self.control_dir.join("cm").display()
-        ));
+        // OpenSSH для Windows не умеет ControlMaster: там каждая команда —
+        // своё соединение (пароль отдаёт askpass автоматически).
+        #[cfg(unix)]
+        {
+            for option in ["ControlMaster=auto", "ControlPersist=120"] {
+                options.push("-o".into());
+                options.push(option.into());
+            }
+            options.push("-o".into());
+            options.push(format!(
+                "ControlPath={}",
+                self.control_dir.join("cm").display()
+            ));
+        }
         match &self.target.auth {
             SshAuth::Password(_) => {
                 for option in [
@@ -546,6 +590,7 @@ impl<'a> Connection<'a> {
 
 impl Drop for Connection<'_> {
     fn drop(&mut self) {
+        #[cfg(unix)]
         let _ = Command::new("ssh")
             .arg("-O")
             .arg("exit")
@@ -563,11 +608,14 @@ impl Drop for Connection<'_> {
 }
 
 fn write_private(path: &Path, text: &str) -> Result<(), String> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
         .open(path)
         .map_err(|error| format!("{}: {error}", path.display()))?;
     file.write_all(text.as_bytes())

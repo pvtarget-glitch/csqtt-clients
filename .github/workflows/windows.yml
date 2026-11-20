@@ -1,0 +1,68 @@
+name: Windows
+
+# Сборка и проверка версии для Windows.
+on:
+  workflow_dispatch:
+  push:
+    branches: [windows]
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            linux -> target
+            rust-client -> ../linux/target/core
+      - name: Ядро
+        working-directory: rust-client
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/linux/target/core
+        run: cargo build --release --locked --ignore-rust-version
+      - name: Служба и CLI
+        run: cargo build --locked -p csqttd -p csqtt
+      - name: Модульные тесты
+        run: cargo test --locked -p csqtt-common -p csqttd -p csqtt
+      - name: Wintun
+        run: |
+          curl -sSfL -o /tmp/wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip
+          unzip -o -q /tmp/wintun.zip -d /tmp/wintun
+          cp /tmp/wintun/wintun/bin/amd64/wintun.dll target/debug/
+          mkdir -p dist && cp /tmp/wintun/wintun/bin/amd64/wintun.dll dist/
+      - name: Служба с имитатором ядра
+        run: tests/windows-test.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: linux/gui/package-lock.json
+      - name: Установщик
+        run: scripts/build-windows.sh
+      - name: Установка и проверка службы
+        run: |
+          SETUP="$(ls dist/csqtt-windows-*-setup.exe | head -1)"
+          "$SETUP" //S
+          sleep 5
+          ls "/c/Program Files/csqtt/"
+          sc.exe query csqttd | grep -q RUNNING
+          "/c/Program Files/csqtt/csqtt.exe" status
+      - name: Окно запускается
+        run: tests/windows-gui-smoke.sh
+      - name: Удаление
+        run: |
+          "/c/Program Files/csqtt/uninstall.exe" //S
+          for _ in $(seq 1 30); do [ -e "/c/Program Files/csqtt/csqttd.exe" ] || break; sleep 1; done
+          if sc.exe query csqttd > /dev/null 2>&1; then echo "служба осталась"; exit 1; fi
+          [ ! -e "/c/Program Files/csqtt/csqttd.exe" ] || { echo "файлы остались"; exit 1; }
+          echo "удалено"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-setup
+          path: linux/dist/csqtt-windows-*-setup.exe

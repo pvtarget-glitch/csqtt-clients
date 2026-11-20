@@ -2,15 +2,28 @@
 
 use crate::ipc::{Event, LogLine, Request, Response, Status};
 use anyhow::{anyhow, bail, Context, Result};
+#[cfg(unix)]
+use std::os::unix::net::UnixStream as Stream;
 use std::{
     io::{BufRead, BufReader, Write},
-    os::unix::net::UnixStream,
     path::{Path, PathBuf},
 };
+/// Windows: служба слушает именованный канал `\\.\pipe\csqttd`.
+#[cfg(windows)]
+type Stream = std::fs::File;
 
 /// Сокет на роутере с Entware: `/run` там нет, всё живёт под `/opt`.
 pub const ENTWARE_SOCKET_PATH: &str = "/opt/var/run/csqtt/csqttd.sock";
 
+#[cfg(windows)]
+pub fn socket_path() -> PathBuf {
+    std::env::var_os("CSQTT_SOCKET")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(crate::SOCKET_PATH))
+}
+
+#[cfg(unix)]
 pub fn socket_path() -> PathBuf {
     if let Some(path) = std::env::var_os("CSQTT_SOCKET").filter(|path| !path.is_empty()) {
         return PathBuf::from(path);
@@ -24,19 +37,52 @@ pub fn socket_path() -> PathBuf {
     }
 }
 
+#[cfg(target_os = "macos")]
+const START_HINT: &str = "Запусти её: sudo launchctl kickstart -k system/io.github.csqtt.daemon";
+#[cfg(windows)]
+const START_HINT: &str = "Запусти службу csqtt: «Службы» Windows или sc start csqttd";
+#[cfg(not(any(target_os = "macos", windows)))]
+const START_HINT: &str = "Запусти её: sudo systemctl start csqttd";
+
+#[cfg(unix)]
+fn open_stream(path: &Path) -> std::io::Result<Stream> {
+    Stream::connect(path)
+}
+
+/// Канал может быть занят другим клиентом: ждём свободный экземпляр.
+#[cfg(windows)]
+fn open_stream(path: &Path) -> std::io::Result<Stream> {
+    const ERROR_PIPE_BUSY: i32 = 231;
+    let mut attempts = 0;
+    loop {
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+        {
+            Err(error) if error.raw_os_error() == Some(ERROR_PIPE_BUSY) && attempts < 50 => {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            result => return result,
+        }
+    }
+}
+
 pub struct Client {
-    reader: BufReader<UnixStream>,
-    writer: UnixStream,
+    reader: BufReader<Stream>,
+    writer: Stream,
     /// События, пришедшие, пока ждали ответ на запрос.
     backlog: Vec<Event>,
 }
 
 impl Client {
     pub fn connect(path: &Path) -> Result<Self> {
-        let stream = UnixStream::connect(path).map_err(|error| {
+        let stream = open_stream(path).map_err(|error| {
             anyhow!(
-                "демон csqttd недоступен ({}: {error}).\nЗапусти его: sudo systemctl start csqttd",
-                path.display()
+                "служба csqttd недоступна ({}: {error}).\n{}",
+                path.display(),
+                START_HINT
             )
         })?;
         let writer = stream.try_clone().context("клонирование сокета")?;

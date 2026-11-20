@@ -49,6 +49,14 @@ pub struct CoreIdentity {
     pub gid: u32,
 }
 
+/// Windows: ядро работает от учётной записи службы; трафик ядра выводится
+/// привязкой сокетов к интерфейсу.
+#[cfg(windows)]
+pub fn resolve_core_user(_name: &str, _allow_root: bool) -> Result<CoreIdentity> {
+    Ok(CoreIdentity { uid: 0, gid: 0 })
+}
+
+#[cfg(unix)]
 pub fn resolve_core_user(name: &str, allow_root: bool) -> Result<CoreIdentity> {
     if name == "root" && allow_root {
         return Ok(CoreIdentity { uid: 0, gid: 0 });
@@ -195,16 +203,34 @@ pub fn spawn(launch: &CoreLaunch<'_>) -> Result<Child> {
         .env_clear()
         .env("CSQTT_EVENTS", "1")
         .env("CSQTT_PASSWORD", &launch.profile.password)
-        .env("HOME", launch.work_dir)
-        .env("PATH", "/usr/bin:/bin")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    // Демон может работать без root только в тестах: тогда UID не меняем.
-    if nix::unistd::geteuid().is_root() {
-        // std сам обнуляет дополнительные группы при смене UID из-под root.
-        command.uid(launch.identity.uid).gid(launch.identity.gid);
+    #[cfg(unix)]
+    {
+        command
+            .env("HOME", launch.work_dir)
+            .env("PATH", "/usr/bin:/bin");
+        // Демон может работать без root только в тестах: тогда UID не меняем.
+        if nix::unistd::geteuid().is_root() {
+            // std сам обнуляет дополнительные группы при смене UID из-под root.
+            command.uid(launch.identity.uid).gid(launch.identity.gid);
+        }
+    }
+    #[cfg(windows)]
+    {
+        // Без SystemRoot процессы Windows не загружают системные библиотеки.
+        let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+        let system32 = std::path::Path::new(&system_root).join("System32");
+        command
+            .env("SystemRoot", &system_root)
+            .env("PATH", &system32)
+            .env("USERPROFILE", launch.work_dir)
+            .env("TEMP", launch.work_dir)
+            .env("TMP", launch.work_dir);
+        // CREATE_NO_WINDOW: у службы нет консоли.
+        command.creation_flags(0x0800_0000);
     }
     command
         .spawn()

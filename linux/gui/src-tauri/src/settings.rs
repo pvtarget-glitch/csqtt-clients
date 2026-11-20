@@ -58,6 +58,46 @@ fn autostart_path() -> Result<PathBuf, String> {
     Ok(base.join("autostart").join("csqtt-gui.desktop"))
 }
 
+#[cfg(windows)]
+const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+
+/// Windows: значение в разделе автозапуска пользователя.
+#[cfg(windows)]
+pub fn autostart_enabled() -> bool {
+    std::process::Command::new("reg")
+        .args(["query", RUN_KEY, "/v", "csqtt"])
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+#[cfg(windows)]
+pub fn set_autostart(enabled: bool, minimized: bool) -> Result<(), String> {
+    let mut command = std::process::Command::new("reg");
+    if enabled {
+        let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+        let value = format!(
+            "\"{}\"{}",
+            exe.display(),
+            if minimized { " --minimized" } else { "" }
+        );
+        command.args([
+            "add", RUN_KEY, "/v", "csqtt", "/t", "REG_SZ", "/d", &value, "/f",
+        ]);
+    } else {
+        if !autostart_enabled() {
+            return Ok(());
+        }
+        command.args(["delete", RUN_KEY, "/v", "csqtt", "/f"]);
+    }
+    let output = command.output().map_err(|error| error.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
+    }
+}
+
+#[cfg(not(windows))]
 pub fn autostart_enabled() -> bool {
     autostart_path().is_ok_and(|path| path.is_file())
 }
@@ -94,6 +134,7 @@ fn autostart_entry(exe: &str, minimized: bool) -> String {
     )
 }
 
+#[cfg(not(windows))]
 pub fn set_autostart(enabled: bool, minimized: bool) -> Result<(), String> {
     let path = autostart_path()?;
     if !enabled {

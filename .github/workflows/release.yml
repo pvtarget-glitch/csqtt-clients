@@ -186,9 +186,65 @@ jobs:
           name: macos-pkg
           path: linux/dist/*.pkg
 
+  windows:
+    # Установщик для Windows x64 (NSIS, служба csqttd, Wintun).
+    needs: server
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            linux -> target
+            rust-client -> ../linux/target/core
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: linux/gui/package-lock.json
+      - name: Модульные тесты
+        run: cargo test --locked -p csqtt-common -p csqttd -p csqtt
+      - name: Wintun
+        run: |
+          curl -sSfL -o /tmp/wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip
+          unzip -o -q /tmp/wintun.zip -d /tmp/wintun
+          mkdir -p dist target/debug
+          cp /tmp/wintun/wintun/bin/amd64/wintun.dll dist/
+          cp /tmp/wintun/wintun/bin/amd64/wintun.dll target/debug/
+      - name: Служба с имитатором ядра
+        run: |
+          cargo build --locked -p csqttd -p csqtt
+          tests/windows-test.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: server
+          path: linux/dist/server
+      - name: Установщик
+        run: scripts/build-windows.sh
+      - name: Установка, окно, удаление
+        run: |
+          SETUP="$(ls dist/csqtt-windows-*-setup.exe | head -1)"
+          "$SETUP" //S
+          sleep 5
+          sc.exe query csqttd | grep -q RUNNING
+          "/c/Program Files/csqtt/csqtt.exe" status
+          tests/windows-gui-smoke.sh
+          "/c/Program Files/csqtt/uninstall.exe" //S
+          for _ in $(seq 1 30); do [ -e "/c/Program Files/csqtt/csqttd.exe" ] || break; sleep 1; done
+          if sc.exe query csqttd > /dev/null 2>&1; then echo "служба осталась"; exit 1; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-setup
+          path: linux/dist/csqtt-windows-*-setup.exe
+
   release:
     if: ${{ github.event.inputs.make_release == 'true' }}
-    needs: [deb, router, macos]
+    needs: [deb, router, macos, windows]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -215,6 +271,10 @@ jobs:
         with:
           name: macos-pkg
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-setup
+          path: dist
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -226,5 +286,6 @@ jobs:
             dist/*.deb
             dist/csqtt-router-*.tar.gz
             dist/*.pkg
+            dist/*-setup.exe
           draft: false
           prerelease: ${{ github.event.inputs.prerelease == 'true' }}

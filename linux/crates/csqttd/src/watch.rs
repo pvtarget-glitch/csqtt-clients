@@ -181,6 +181,42 @@ fn default_route(routes: &str, exclude: &str) -> Option<(String, Ipv4Addr)> {
         .map(|(_, interface, gateway)| (interface, gateway))
 }
 
+/// Windows: время без сна (QueryUnbiasedInterruptTime) против времени со
+/// сном (GetTickCount64).
+#[cfg(windows)]
+fn clock_offset() -> Option<Duration> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn QueryUnbiasedInterruptTime(time: *mut u64) -> i32;
+        fn GetTickCount64() -> u64;
+    }
+    let mut unbiased = 0u64;
+    // SAFETY: функции пишут только в переданную переменную.
+    if unsafe { QueryUnbiasedInterruptTime(&mut unbiased) } == 0 {
+        return None;
+    }
+    let total = Duration::from_millis(unsafe { GetTickCount64() });
+    total.checked_sub(Duration::from_nanos(unbiased.saturating_mul(100)))
+}
+
+/// Windows: интерфейс, через который система отправила бы пакет в интернет
+/// (до маршрутов туннеля). Имя интерфейса — его индекс: так его понимает
+/// `--bind-interface` ядра.
+#[cfg(windows)]
+pub fn current_uplink(exclude: &str) -> Option<Uplink> {
+    let index = crate::platform::best_interface_index()?;
+    let interface = index.to_string();
+    if interface == exclude {
+        return None;
+    }
+    Some(Uplink {
+        interface,
+        gateway: Ipv4Addr::UNSPECIFIED,
+        address: None,
+    })
+}
+
+#[cfg(unix)]
 fn interface_address(interface: &str) -> Option<Ipv4Addr> {
     nix::ifaddrs::getifaddrs().ok()?.find_map(|entry| {
         if entry.interface_name != interface {

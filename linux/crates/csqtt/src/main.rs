@@ -107,6 +107,7 @@ fn main() {
     // `csqtt logs | head` должен завершаться тихо, а не падать на записи
     // в закрытый канал: возвращаем SIGPIPE поведение по умолчанию.
     // SAFETY: вызов до создания потоков, обработчик — системный.
+    #[cfg(unix)]
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
@@ -310,6 +311,44 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
+#[cfg(windows)]
+fn local_time(millis: u64) -> String {
+    #[repr(C)]
+    struct SystemTime {
+        year: u16,
+        month: u16,
+        day_of_week: u16,
+        day: u16,
+        hour: u16,
+        minute: u16,
+        second: u16,
+        milliseconds: u16,
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn FileTimeToSystemTime(file_time: *const u64, system_time: *mut SystemTime) -> i32;
+        fn SystemTimeToTzSpecificLocalTime(
+            zone: *const u8,
+            universal: *const SystemTime,
+            local: *mut SystemTime,
+        ) -> i32;
+    }
+    // FILETIME: сотни наносекунд с 1601 года.
+    let file_time = (millis + 11_644_473_600_000) * 10_000;
+    let mut utc: SystemTime = unsafe { std::mem::zeroed() };
+    let mut local: SystemTime = unsafe { std::mem::zeroed() };
+    // SAFETY: структуры корректного размера, функции только пишут в них.
+    let ok = unsafe {
+        FileTimeToSystemTime(&file_time, &mut utc) != 0
+            && SystemTimeToTzSpecificLocalTime(std::ptr::null(), &utc, &mut local) != 0
+    };
+    if !ok {
+        return "--:--:--".to_owned();
+    }
+    format!("{:02}:{:02}:{:02}", local.hour, local.minute, local.second)
+}
+
+#[cfg(unix)]
 fn local_time(millis: u64) -> String {
     let seconds = (millis / 1000) as libc::time_t;
     // SAFETY: localtime_r пишет только в переданную структуру.
@@ -470,6 +509,12 @@ fn print_streams(streams: &[StreamInfo]) {
 
 /// Переносит текущий процесс в группу «мимо туннеля» и заменяет его
 /// программой: дочерние процессы остаются в той же группе.
+#[cfg(not(unix))]
+fn direct(_command: &[String], _request: Request) -> Result<()> {
+    bail!("программы мимо туннеля пока есть только в версии для Linux")
+}
+
+#[cfg(unix)]
 fn direct(command: &[String], request: Request) -> Result<()> {
     use std::os::unix::process::CommandExt;
     let mut client = Client::connect(&client::socket_path())?;

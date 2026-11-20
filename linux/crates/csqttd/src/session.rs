@@ -13,7 +13,7 @@ use csqtt_common::{
     tunconf::{parse_server_routing, parse_tunconf, ServerRouting, TunConf},
 };
 use std::{
-    collections::BTreeSet, io::Read, path::PathBuf, process::ExitStatus, sync::Arc, time::Duration,
+    collections::BTreeSet, path::PathBuf, process::ExitStatus, sync::Arc, time::Duration,
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -180,16 +180,7 @@ pub async fn send_control(shared: &Arc<Shared>, control: Control) -> Result<(), 
 
 fn random_hex(bytes: usize) -> String {
     let mut buffer = vec![0u8; bytes];
-    let filled = std::fs::File::open("/dev/urandom")
-        .and_then(|mut file| file.read_exact(&mut buffer))
-        .is_ok();
-    if !filled {
-        // /dev/urandom есть всегда; запасной вариант лишь против паники.
-        let seed = now_millis() ^ u64::from(std::process::id());
-        for (index, byte) in buffer.iter_mut().enumerate() {
-            *byte = (seed >> ((index % 8) * 8)) as u8;
-        }
-    }
+    csqtt_common::deploy::fill_random(&mut buffer);
     buffer.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
@@ -227,9 +218,15 @@ async fn sleep_until_optional(deadline: Option<Instant>) {
 }
 
 fn describe_exit(status: Option<ExitStatus>) -> String {
-    use std::os::unix::process::ExitStatusExt;
+    #[cfg(unix)]
+    let signal = {
+        use std::os::unix::process::ExitStatusExt;
+        status.and_then(|status| status.signal())
+    };
+    #[cfg(not(unix))]
+    let signal: Option<i32> = None;
     match status {
-        Some(status) => match (status.code(), status.signal()) {
+        Some(status) => match (status.code(), signal) {
             (Some(core::EXIT_TUN_LOST), _) => "код 3 (TUN потерян)".to_owned(),
             (Some(code), _) => format!("код {code}"),
             (None, Some(signal)) => format!("сигнал {signal}"),
@@ -736,7 +733,8 @@ impl Session {
         if first {
             self.shared.note(format!(
                 "туннель поднят: {} через {}",
-                conf.ip, self.shared.config.interface
+                conf.ip,
+                self.tunnel_interface()
             ));
         }
     }
@@ -773,15 +771,16 @@ impl Session {
         Ok(core::CoreTun::Uds(format!("csqtt_tun_{}", random_hex(8))))
     }
 
-    /// macOS: utun и пересылка нужны до запуска ядра — ему передаются порты.
-    #[cfg(target_os = "macos")]
+    /// macOS, Windows: интерфейс и пересылка нужны до запуска ядра — ему
+    /// передаются порты.
+    #[cfg(not(target_os = "linux"))]
     fn core_tun(&mut self) -> Result<core::CoreTun, String> {
         let shared = self.shared.clone();
         if self.network.is_none() {
             let mut params = NetParams::from_config(&shared.config, shared.identity.uid);
             params.selected_only = self.profile.selected_apps_only;
             let network = tokio::task::block_in_place(|| Network::create(params))
-                .map_err(|error| format!("не удалось создать utun: {error:#}"))?;
+                .map_err(|error| format!("не удалось создать интерфейс туннеля: {error:#}"))?;
             self.network = Some(network);
         }
         let link = self
@@ -820,7 +819,7 @@ impl Session {
 
     /// Имя интерфейса туннеля для статуса.
     fn tunnel_interface(&self) -> String {
-        #[cfg(target_os = "macos")]
+        #[cfg(not(target_os = "linux"))]
         if let Some(network) = self.network.as_ref() {
             return network.interface_name().to_owned();
         }

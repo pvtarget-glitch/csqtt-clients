@@ -275,15 +275,27 @@ pub fn exec_arguments(exec: &str) -> Vec<String> {
 }
 
 pub fn csqtt_binary() -> PathBuf {
-    for dir in std::env::var("PATH").unwrap_or_default().split(':') {
-        let candidate = Path::new(dir).join("csqtt");
+    // Windows: CLI лежит рядом с окном; на Unix — в PATH.
+    let name = if cfg!(windows) { "csqtt.exe" } else { "csqtt" };
+    if cfg!(windows) {
+        if let Some(path) = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.join(name)))
+            .filter(|path| path.is_file())
+        {
+            return path;
+        }
+    }
+    let separator = if cfg!(windows) { ';' } else { ':' };
+    for dir in std::env::var("PATH").unwrap_or_default().split(separator) {
+        let candidate = Path::new(dir).join(name);
         if candidate.is_file() {
             return candidate;
         }
     }
     std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("csqtt")))
+        .and_then(|exe| exe.parent().map(|dir| dir.join(name)))
         .filter(|path| path.is_file())
         .unwrap_or_else(|| PathBuf::from("/usr/bin/csqtt"))
 }

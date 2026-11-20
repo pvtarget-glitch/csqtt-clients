@@ -72,7 +72,7 @@ pub struct DaemonConfig {
     pub tunnel_cgroup: String,
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 mod defaults {
     pub const CORE_PATH: &str = "/usr/lib/csqtt/csqtt-core";
     pub const CORE_USER: &str = "csqtt-core";
@@ -89,13 +89,45 @@ mod defaults {
     pub const RUNTIME_DIR: &str = "/var/run/csqtt";
 }
 
+/// Windows: ядро и данные — рядом со службой и в ProgramData.
+#[cfg(windows)]
+mod defaults {
+    fn beside_exe(name: &str) -> String {
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.join(name)))
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|| name.to_owned())
+    }
+    pub fn core_path() -> String {
+        beside_exe("csqtt-core.exe")
+    }
+    pub fn domains() -> String {
+        beside_exe("domains.txt")
+    }
+    pub const CORE_USER: &str = "";
+    pub const RUNTIME_DIR: &str = r"C:\ProgramData\csqtt\run";
+}
+
+#[cfg(not(windows))]
+mod default_paths {
+    pub fn core_path() -> String {
+        super::defaults::CORE_PATH.to_owned()
+    }
+    pub fn domains() -> String {
+        super::defaults::DOMAINS.to_owned()
+    }
+}
+#[cfg(windows)]
+use defaults as default_paths;
+
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
             mode: Mode::Full,
-            core_path: defaults::CORE_PATH.into(),
+            core_path: default_paths::core_path().into(),
             core_user: defaults::CORE_USER.into(),
-            domains_template: defaults::DOMAINS.into(),
+            domains_template: default_paths::domains().into(),
             socket_path: csqtt_common::SOCKET_PATH.into(),
             control_group: csqtt_common::CONTROL_GROUP.into(),
             runtime_dir: defaults::RUNTIME_DIR.into(),
@@ -165,7 +197,9 @@ impl DaemonConfig {
         }
         // В режиме interface трафик ядра и так не попадает в туннель, и на
         // роутере с Entware отдельного пользователя обычно нет.
-        if self.core_user.is_empty() || (self.core_user == "root" && self.mode == Mode::Full) {
+        if cfg!(unix)
+            && (self.core_user.is_empty() || (self.core_user == "root" && self.mode == Mode::Full))
+        {
             bail!("core_user: нужен отдельный непривилегированный пользователь");
         }
         Ok(())
@@ -209,6 +243,10 @@ mod tests {
             "unknown_key = 1",
             "bypass_cgroup = \"../escape\"",
         ] {
+            // В Windows ядро работает от имени службы, core_user не нужен.
+            if cfg!(windows) && text.starts_with("core_user") {
+                continue;
+            }
             let parsed: Result<DaemonConfig, _> = toml::from_str(text);
             assert!(
                 parsed

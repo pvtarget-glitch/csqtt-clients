@@ -81,6 +81,10 @@ csqtt server remove 203.0.113.7
 
 Установщики `csqtt-macos-…-arm64.pkg` (Apple Silicon) и `…-x86_64.pkg` (Intel) лежат в Releases. Окно, служба и `csqtt` — те же, что на Linux. Служба работает через `utun` и launchd, окно проверки VK открывается внутри приложения. Пакет не подписан Apple. Установка, устройство и ограничения описаны в [docs/macos.md](docs/macos.md).
 
+## Windows (тестовая сборка)
+
+Установщик `csqtt-windows-…-x64-setup.exe` для Windows 10 и 11 лежит в Releases. Окно, служба и `csqtt` — те же, что на Linux. Служба работает через адаптер Wintun и ставится как служба Windows, окно проверки VK открывается внутри приложения. Установщик не подписан. Установка, устройство и ограничения описаны в [docs/windows.md](docs/windows.md).
+
 ## Роутер Keenetic
 
 Сборка для роутеров Keenetic на aarch64 с Entware и XKeen (Mihomo или Xray), например Giga KN-1012: архив `csqtt-router-…-aarch64.tar.gz` в Releases. На роутере служба только поднимает интерфейс `csqtt0`. Что в него отправлять, решают правила Mihomo (`interface-name: csqtt0`) или Xray (`sockopt.interface`). Маршруты, DNS и iptables роутера служба не трогает. Установка и примеры правил — [docs/keenetic.md](docs/keenetic.md).
@@ -225,6 +229,8 @@ CSQTT_CORE_BIN="$PWD/dist/csqtt-core" cargo test -p csqttd -- --ignored
 - Настоящее ядро 2.5.0: принимает аргументы демона, получает TUN-fd, останавливается по `STOP`.
 - Окно капчи: перехват токена через fetch и XHR на локальной странице-заглушке.
 - Режим роутера: `sudo tests/interface-mode.sh` — 11 проверок: интерфейс поднимается, маршруты, правила и DNS не меняются, UDP и TCP из сокетов, привязанных к `csqtt0`, доходят до ядра, остальное идёт мимо. Сборка aarch64 — в GitHub Actions; на настоящем Keenetic не запускалась.
+- macOS: `sudo tests/macos-test.sh` — 14 проверок в GitHub Actions (utun, маршруты, DNS, пересылка в ядро), установщик `.pkg` и служба launchd.
+- Windows: `tests/windows-test.sh` — 10 проверок в GitHub Actions (адаптер Wintun, маршруты, DNS, пересылка в ядро), установщик, служба, запуск окна и удаление.
 - Установка сервера: `sudo tests/deploy-test.sh` — 25 проверок против настоящего sshd с имитатором `deploy.sh`: вход по паролю и ключу с паролем, sudo с паролем, загрузка файлов, ошибки входа, установщика и подмены ключа сервера. Сам `deploy.sh` на настоящем VPS из этого клиента ещё не запускался.
 
 Не проверено (в среде сборки не было ни рабочего стола, ни systemd, ни IPv6):
